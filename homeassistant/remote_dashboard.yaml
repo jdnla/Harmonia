@@ -1,0 +1,372 @@
+title: Media Remote
+views:
+- title: Media Center
+  path: remote
+  icon: mdi:remote-tv
+  type: sections
+  max_columns: 2
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Now Playing
+      heading_style: title
+      icon: mdi:play-circle
+    - type: markdown
+      content: "## {{ states('sensor.media_center_media_title') }}\n{% set sub = states('sensor.media_center_media_subtitle')\
+        \ %} {% if sub not in ['', 'unknown', 'unavailable', 'None'] %}{{ sub }}{% endif %}\n**{{ states('sensor.media_center_media_state')\
+        \ | title }}** {% set src = states('sensor.media_center_media_source') %} {% if src not in ['',\
+        \ 'none', 'unknown'] %}\xB7 via {{ src }}{% endif %}\n"
+    - type: picture
+      image_entity: sensor.media_center_media_art
+      tap_action:
+        action: none
+    - type: horizontal-stack
+      cards:
+      - type: button
+        name: Prev
+        icon: mdi:skip-previous
+        tap_action:
+          action: toggle
+        entity: button.media_center_previous
+      - type: button
+        name: Play/Pause
+        icon: mdi:play-pause
+        tap_action:
+          action: toggle
+        entity: button.media_center_play_pause
+      - type: button
+        name: Next
+        icon: mdi:skip-next
+        tap_action:
+          action: toggle
+        entity: button.media_center_next
+  - type: grid
+    cards:
+    - type: heading
+      heading: Navigation
+      heading_style: title
+      icon: mdi:gamepad
+    - type: grid
+      columns: 3
+      square: false
+      cards:
+      - type: markdown
+        content: ' '
+      - type: button
+        show_name: false
+        icon: mdi:chevron-up
+        tap_action:
+          action: toggle
+        entity: button.media_center_nav_up
+      - type: markdown
+        content: ' '
+      - type: button
+        show_name: false
+        icon: mdi:chevron-left
+        tap_action:
+          action: toggle
+        entity: button.media_center_nav_left
+      - type: button
+        name: OK
+        icon: mdi:circle-slice-8
+        tap_action:
+          action: toggle
+        entity: button.media_center_nav_ok
+      - type: button
+        show_name: false
+        icon: mdi:chevron-right
+        tap_action:
+          action: toggle
+        entity: button.media_center_nav_right
+      - type: button
+        show_name: false
+        icon: mdi:keyboard-return
+        tap_action:
+          action: toggle
+        entity: button.media_center_nav_back
+      - type: button
+        show_name: false
+        icon: mdi:chevron-down
+        tap_action:
+          action: toggle
+        entity: button.media_center_nav_down
+      - type: markdown
+        content: ' '
+  - type: grid
+    cards:
+    - type: heading
+      heading: Apps & Actions
+      heading_style: title
+      icon: mdi:apps
+    - type: horizontal-stack
+      cards:
+      - type: button
+        name: Plex
+        icon: mdi:plex
+        tap_action:
+          action: toggle
+        entity: button.media_center_launcher_launch_plex
+      - type: button
+        name: Netflix
+        icon: mdi:netflix
+        tap_action:
+          action: toggle
+        entity: button.media_center_launcher_launch_netflix
+      - type: button
+        name: Sportsnet
+        icon: mdi:hockey-puck
+        tap_action:
+          action: toggle
+        entity: button.media_center_launch_sportsnet
+    - type: horizontal-stack
+      cards:
+      - type: button
+        name: IPTVnator
+        icon: mdi:television-box
+        tap_action:
+          action: toggle
+        entity: button.media_center_launch_iptvnator
+      - type: button
+        name: Home
+        icon: mdi:home
+        tap_action:
+          action: toggle
+        entity: button.media_center_home_screen
+      - type: button
+        name: Wake
+        icon: mdi:monitor-shimmer
+        tap_action:
+          action: toggle
+        entity: button.media_center_launcher_wake_display
+  - type: grid
+    cards:
+    - type: heading
+      heading: Power & Audio
+      heading_style: title
+      icon: mdi:power
+    - type: entities
+      title: Power & Audio
+      show_header_toggle: false
+      entities:
+      - entity: switch.media_center_bridge_master_power
+        name: Media Center (TV + AVR)
+      - entity: number.media_center_bridge_master_volume
+        name: Volume
+      - entity: switch.denon_x1800h_mute
+        name: Mute
+      - type: divider
+      - entity: select.denon_x1800h_input
+        name: AVR Input
+      - entity: select.vizio_p65_input
+        name: TV Input
+    - type: horizontal-stack
+      cards:
+      - type: button
+        name: All On
+        icon: mdi:power
+        tap_action:
+          action: toggle
+        entity: button.media_center_bridge_media_center_on
+      - type: button
+        name: All Off
+        icon: mdi:power-off
+        tap_action:
+          action: toggle
+        entity: button.media_center_bridge_media_center_off
+  - type: grid
+    cards:
+    - type: heading
+      heading: Options
+      heading_style: title
+      icon: mdi:cog
+    - type: entities
+      title: Options
+      show_header_toggle: false
+      entities:
+      - entity: switch.media_center_auto_power_off_idle
+        name: Auto Power-Off (idle)
+      - entity: switch.media_center_garage_auto_popup
+        name: Camera Auto-Popup
+- title: Apple TV
+  path: appletv
+  icon: mdi:apple
+  type: sections
+  max_columns: 2
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Now Playing
+      heading_style: title
+      icon: mdi:apple
+    - type: media-control
+      entity: media_player.living_room
+  - type: grid
+    cards:
+    - type: heading
+      heading: Navigation
+      heading_style: title
+      icon: mdi:gamepad
+    - type: grid
+      columns: 3
+      square: false
+      cards:
+      - type: markdown
+        content: ' '
+      - type: button
+        show_name: false
+        icon: mdi:chevron-up
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: up
+      - type: markdown
+        content: ' '
+      - type: button
+        show_name: false
+        icon: mdi:chevron-left
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: left
+      - type: button
+        show_name: false
+        icon: mdi:circle-slice-8
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: select
+      - type: button
+        show_name: false
+        icon: mdi:chevron-right
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: right
+      - type: markdown
+        content: ' '
+      - type: button
+        show_name: false
+        icon: mdi:chevron-down
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: down
+      - type: markdown
+        content: ' '
+  - type: grid
+    cards:
+    - type: heading
+      heading: Controls
+      heading_style: title
+      icon: mdi:remote
+    - type: horizontal-stack
+      cards:
+      - type: button
+        show_name: true
+        icon: mdi:menu
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: menu
+        name: Menu
+      - type: button
+        show_name: true
+        icon: mdi:home
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: home
+        name: Home
+      - type: button
+        show_name: true
+        icon: mdi:keyboard-return
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: top_menu
+        name: Back
+    - type: horizontal-stack
+      cards:
+      - type: button
+        show_name: true
+        icon: mdi:skip-previous
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: skip_backward
+        name: Rewind
+      - type: button
+        show_name: true
+        icon: mdi:play-pause
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: play_pause
+        name: Play/Pause
+      - type: button
+        show_name: true
+        icon: mdi:skip-next
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: skip_forward
+        name: Forward
+    - type: horizontal-stack
+      cards:
+      - type: button
+        show_name: true
+        icon: mdi:volume-minus
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: volume_down
+        name: Vol-
+      - type: button
+        show_name: true
+        icon: mdi:volume-plus
+        tap_action:
+          action: perform-action
+          perform_action: remote.send_command
+          target:
+            entity_id: remote.living_room
+          data:
+            command: volume_up
+        name: Vol+

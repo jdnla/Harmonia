@@ -1,0 +1,26 @@
+/* Harmonia D-pad focus highlight.
+ *
+ * We draw our own ring rather than relying on the site's :focus styles (many
+ * sites hide them). A single overlay element is positioned over the focused
+ * target; it's pointer-events:none so it never blocks clicks. Color matches the
+ * dashboard's D-pad blue (#4fc3f7). Uses its own layer + very high z-index so it
+ * sits above site chrome. Keep this visual-only — behavior lives in the JS. */
+
+#harmonia-dpad-ring {
+  position: fixed;
+  z-index: 2147483647;           /* max — above site overlays */
+  pointer-events: none;          /* never intercept clicks/hover */
+  box-sizing: border-box;
+  border: 3px solid #4fc3f7;
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.55),
+              0 0 14px 3px rgba(79, 195, 247, 0.75);
+  transition: top 90ms ease, left 90ms ease,
+              width 90ms ease, height 90ms ease;
+  will-change: top, left, width, height;
+  display: none;                 /* shown once a target is focused */
+}
+
+#harmonia-dpad-ring.harmonia-visible {
+  display: block;
+}

@@ -1,0 +1,190 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Media Center dashboard — phone-optimized
+#
+# Requires HACS custom card: button-card  (custom:button-card)
+# (card-mod styling removed for portability; the entities cards use HA defaults.)
+#
+# Entity IDs are the REAL ones HA generated from the original device names
+# (verified via Developer Tools → States):
+#   Hub:      switch/number.media_center_bridge_*
+#   Launcher: button.media_center_launcher_*
+#   Denon:    *.denon_x1800h_*
+#   Vizio:    *.vizio_p65_*
+#
+# HOW TO USE: dashboard → Edit → add a new view → its settings → "Edit in YAML"
+# → paste. (If the target wants just the view, omit the top `views:` line and
+# paste from `title: Media Center`.)
+# ─────────────────────────────────────────────────────────────────────────────
+
+views:
+  - title: Media Center
+    path: media-center
+    icon: mdi:television-classic
+    type: sections
+    max_columns: 1
+    sections:
+      - type: grid
+        cards:
+          - type: custom:button-card
+            entity: switch.media_center_bridge_master_power
+            name: Media Center
+            icon: mdi:television-play
+            size: 22%
+            aspect_ratio: 2.6/1
+            show_state: true
+            state_display: |
+              [[[ return (entity && entity.state === 'on') ? 'ON' : 'OFF' ]]]
+            tap_action:
+              action: toggle
+            styles:
+              card:
+                - border-radius: 22px
+                - font-size: 17px
+                - font-weight: 600
+              grid:
+                - grid-template-areas: '"i n" "i s"'
+                - grid-template-columns: min-content 1fr
+                - grid-template-rows: 1fr min-content
+              img_cell:
+                - justify-content: start
+                - margin-left: 6px
+              name:
+                - justify-self: start
+                - padding-left: 12px
+              state:
+                - justify-self: start
+                - padding-left: 12px
+                - opacity: 0.7
+                - font-size: 13px
+            state:
+              - value: 'on'
+                color: white
+                styles:
+                  card:
+                    - background: 'linear-gradient(135deg,#2e7d32,#1b5e20)'
+              - value: 'off'
+                color: '#b0b0b0'
+                styles:
+                  card:
+                    - background: '#26282e'
+      - type: grid
+        cards:
+          - type: horizontal-stack
+            cards:
+              - type: custom:button-card
+                entity: button.media_center_launcher_launch_plex
+                name: Plex
+                icon: mdi:plex
+                aspect_ratio: 1/1
+                tap_action:
+                  action: toggle
+                styles:
+                  card:
+                    - border-radius: 20px
+                    - background: '#1f2733'
+                    - font-size: 15px
+                    - font-weight: 600
+                  icon:
+                    - color: '#e5a00d'
+                    - width: 46px
+              - type: custom:button-card
+                entity: button.media_center_launcher_launch_netflix
+                name: Netflix
+                icon: mdi:netflix
+                aspect_ratio: 1/1
+                tap_action:
+                  action: toggle
+                styles:
+                  card:
+                    - border-radius: 20px
+                    - background: '#1f2733'
+                    - font-size: 15px
+                    - font-weight: 600
+                  icon:
+                    - color: '#e50914'
+                    - width: 46px
+              - type: custom:button-card
+                entity: button.media_center_launcher_wake_display
+                name: Wake
+                icon: mdi:monitor-shimmer
+                aspect_ratio: 1/1
+                tap_action:
+                  action: toggle
+                styles:
+                  card:
+                    - border-radius: 20px
+                    - background: '#1f2733'
+                    - font-size: 15px
+                    - font-weight: 600
+                  icon:
+                    - color: '#4fc3f7'
+                    - width: 46px
+      - type: grid
+        cards:
+          - type: vertical-stack
+            cards:
+              - type: markdown
+                content: >
+                  ### {{ states('sensor.media_center_launcher_now_playing') }}
+              - type: horizontal-stack
+                cards:
+                  - type: custom:button-card
+                    entity: button.media_center_launcher_previous
+                    name: Prev
+                    icon: mdi:skip-previous
+                    aspect_ratio: 1.6/1
+                    tap_action: { action: toggle }
+                    styles:
+                      card: [background: "#1f2733", font-size: 12px]
+                      icon: [color: "#cfd8dc", width: 34px]
+                  - type: custom:button-card
+                    entity: button.media_center_launcher_play_pause
+                    name: Play/Pause
+                    icon: mdi:play-pause
+                    aspect_ratio: 1.6/1
+                    tap_action: { action: toggle }
+                    styles:
+                      card: [background: "#1f2733", font-size: 12px]
+                      icon: [color: "#4fc3f7", width: 40px]
+                  - type: custom:button-card
+                    entity: button.media_center_launcher_next
+                    name: Next
+                    icon: mdi:skip-next
+                    aspect_ratio: 1.6/1
+                    tap_action: { action: toggle }
+                    styles:
+                      card: [background: "#1f2733", font-size: 12px]
+                      icon: [color: "#cfd8dc", width: 34px]
+      - type: grid
+        cards:
+          - type: entities
+            title: Audio
+            show_header_toggle: false
+            entities:
+              - entity: number.media_center_bridge_master_volume
+                name: Volume
+                icon: mdi:volume-high
+              - entity: switch.denon_x1800h_mute
+                name: Mute
+                icon: mdi:volume-mute
+              - entity: select.denon_x1800h_input
+                name: AVR Input
+                icon: mdi:import
+      - type: grid
+        cards:
+          - type: entities
+            title: Devices
+            show_header_toggle: false
+            entities:
+              - type: section
+                label: AVR (Denon)
+              - entity: switch.denon_x1800h_power
+                name: AVR Power
+              - entity: select.denon_x1800h_input
+                name: AVR Input
+              - type: section
+                label: TV (Vizio)
+              - entity: switch.vizio_p65_power
+                name: TV Power
+              - entity: select.vizio_p65_input
+                name: TV Input

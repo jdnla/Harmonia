@@ -1,0 +1,18 @@
+[Unit]
+Description=AVR + TV to Home Assistant MQTT bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs as the installing user (set by install.sh via drop-in or default)
+EnvironmentFile=%h/.config/avr-tv-bridge/config.env
+WorkingDirectory=/opt/avr-tv-bridge/src
+ExecStart=/opt/avr-tv-bridge/venv/bin/python /opt/avr-tv-bridge/src/bridge.py
+Restart=on-failure
+RestartSec=5
+# Give the network / broker a moment on boot
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do nc -z ${MQTT_HOST} ${MQTT_PORT} 2>/dev/null && exit 0; sleep 2; done; exit 0'
+
+[Install]
+WantedBy=multi-user.target

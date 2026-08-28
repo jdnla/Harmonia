@@ -1,0 +1,185 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# avr-tv-bridge — "Now Playing" media_player + Pixel 9 notification
+#
+# WHAT THIS GIVES YOU (core HA, no custom components)
+#   1. An actionable "Now Playing" notification on your Pixel 9 (via the HA
+#      companion app): title, subtitle/episode, poster art (Plex), current
+#      state, and prev / play-pause / next media action buttons that control
+#      playback. Refreshes on state/title change, clears when playback stops.
+#   2. Transport scripts + action handling wired to the bridge's MQTT topics.
+#
+# OPTIONAL (needs a HACS integration): a full media_player CARD inside HA with a
+#   live scrubber — see the note in the middle of this file and
+#   homeassistant/media_player_hacs.yaml. Not required for the phone notification.
+#
+# HOW IT WORKS
+#   The bridge publishes discrete now-playing fields over MQTT (state, title,
+#   subtitle, art, position, duration, source, media_type). Core HA has NO
+#   media_player MQTT discovery platform, so we build the entity from:
+#     - MQTT *sensors* the bridge already auto-discovers (the field topics), and
+#     - a Universal Media Player that composes them + scripts that publish the
+#       transport commands back to the bridge.
+#   Source is automatic: Plex's API when Plex is playing (real show/episode +
+#   poster), else MPRIS for Netflix/Chrome (state + scrubber; Netflix reports
+#   only "Netflix" as the title with no art — a web-player limitation).
+#
+# INSTALL
+#   Home Assistant supports "packages" — a single file holding multiple config
+#   domains. Easiest path:
+#     1. In configuration.yaml, ensure you have:
+#          homeassistant:
+#            packages: !include_dir_named packages
+#     2. Drop this file in  <config>/packages/avr_now_playing.yaml
+#     3. Replace notify.mobile_app_pixel_9 below if your device slug differs
+#        (Developer Tools → Actions → search "mobile_app").
+#     4. Restart HA (scripts + automations load on restart; you can also use
+#        Developer Tools → YAML → "Reload Scripts" and "Reload Automations").
+#
+# PREREQUISITES
+#   - The bridge's MQTT field sensors exist. They're discovered but
+#     enabled_by_default:false to keep the UI tidy — ENABLE these entities once
+#     (Settings → Devices → Media Center → the disabled entities → Enable):
+#       sensor.media_center_media_state
+#       sensor.media_center_media_title
+#       sensor.media_center_media_subtitle
+#       sensor.media_center_media_art
+#       sensor.media_center_media_position
+#       sensor.media_center_media_duration
+#     (If your HA generated different entity_ids, adjust the templates below.)
+#   - MQTT integration configured (same broker the bridge uses).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ---- scripts: publish transport commands back to the bridge ------------------
+# The bridge listens on avr-tv-bridge/media/<action>/set (payload "PRESS").
+script:
+  media_center_playpause:
+    alias: "Media Center: Play/Pause"
+    sequence:
+      - service: mqtt.publish
+        data:
+          topic: avr-tv-bridge/media/playpause/set
+          payload: "PRESS"
+  media_center_next:
+    alias: "Media Center: Next"
+    sequence:
+      - service: mqtt.publish
+        data:
+          topic: avr-tv-bridge/media/next/set
+          payload: "PRESS"
+  media_center_previous:
+    alias: "Media Center: Previous"
+    sequence:
+      - service: mqtt.publish
+        data:
+          topic: avr-tv-bridge/media/previous/set
+          payload: "PRESS"
+
+# ---- (OPTIONAL) rich media_player CARD in HA ---------------------------------
+# IMPORTANT: core Home Assistant has NO template media_player platform (only
+# sensor/binary_sensor/number/select/... are supported by the Template
+# integration, and the MQTT integration has no media_player either). So a real
+# now-playing CARD with a scrubber requires ONE of:
+#   (a) A HACS custom integration — "template-media-player" by EuleMitKeule —
+#       which lets you build a media_player from templates. If you install it,
+#       see homeassistant/media_player_hacs.yaml in this repo for the entity
+#       definition that maps the bridge's field sensors into a full card.
+#   (b) No extra entity — just use the sensors directly on a dashboard card
+#       (see homeassistant-dashboard.yaml). The Now Playing sensor already shows
+#       title/subtitle; add an image card bound to sensor...media_art for art.
+# The PHONE NOTIFICATION below needs NEITHER — it reads the field sensors
+# directly, so it works on a stock core HA with no custom components.
+
+# ---- automation: Pixel 9 now-playing notification ----------------------------
+automation:
+  - id: avr_now_playing_notify
+    alias: "Media Center: Now Playing notification (Pixel 9)"
+    description: >
+      Push/refresh an actionable media notification whenever playback starts,
+      the title changes, or play/pause toggles. Cleared when playback stops.
+    mode: queued
+    max: 10
+    trigger:
+      - platform: state
+        entity_id: sensor.media_center_media_state
+      - platform: state
+        entity_id: sensor.media_center_media_title
+    action:
+      - choose:
+          # ---- playing/paused: (re)post the media notification --------------
+          - conditions:
+              - condition: template
+                value_template: >
+                  {{ states('sensor.media_center_media_state')
+                     in ['playing','paused'] }}
+            sequence:
+              - variables:
+                  title: "{{ states('sensor.media_center_media_title') }}"
+                  subtitle: "{{ states('sensor.media_center_media_subtitle') }}"
+                  art: "{{ states('sensor.media_center_media_art') }}"
+                  playing: >
+                    {{ states('sensor.media_center_media_state') == 'playing' }}
+              - service: notify.mobile_app_pixel_9
+                data:
+                  title: "{{ title if title else 'Media Center' }}"
+                  message: >
+                    {{ subtitle if subtitle else ('Playing' if playing else 'Paused') }}
+                  data:
+                    # Heads-up popup on its own channel. NOTE: Android LOCKS a
+                    # channel's importance at first use — if you ever sent a
+                    # notification on an old channel name at low importance,
+                    # changing importance here won't take; rename the channel to
+                    # force a fresh one. 'high' = pops up on screen.
+                    tag: avr_now_playing
+                    channel: Media Center Popup
+                    importance: high
+                    color: "#e50914"
+                    # Tapping the notification body opens the Media Center
+                    # controls dashboard. This path matches the dashboard in
+                    # homeassistant/remote_dashboard.yaml (URL path "media-remote",
+                    # first view). Change it if you install the view elsewhere,
+                    # e.g. "/lovelace/media-center" for a view on the default dash.
+                    clickAction: "/media-remote/0"
+                    # Poster art (only when present — Netflix has none).
+                    image: >
+                      {% set a = art %}
+                      {{ a if a not in ['', 'unknown', 'unavailable', 'None'] else '' }}
+                    notification_icon: mdi:play-circle
+                    # Action buttons -> call back to the transport scripts via
+                    # the companion app's notification actions.
+                    actions:
+                      - action: "AVR_PREV"
+                        title: "⏮"
+                      - action: "AVR_PLAYPAUSE"
+                        title: "{{ '⏸' if playing else '▶' }}"
+                      - action: "AVR_NEXT"
+                        title: "⏭"
+        # ---- stopped/idle: clear the notification ---------------------------
+        default:
+          - service: notify.mobile_app_pixel_9
+            data:
+              message: clear_notification
+              data:
+                tag: avr_now_playing
+
+  # ---- handle the notification action buttons --------------------------------
+  - id: avr_now_playing_actions
+    alias: "Media Center: Now Playing notification actions"
+    mode: parallel
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+    condition:
+      - condition: template
+        value_template: >
+          {{ trigger.event.data.action in ['AVR_PREV','AVR_PLAYPAUSE','AVR_NEXT'] }}
+    action:
+      - choose:
+          - conditions: "{{ trigger.event.data.action == 'AVR_PREV' }}"
+            sequence:
+              - action: script.media_center_previous
+          - conditions: "{{ trigger.event.data.action == 'AVR_PLAYPAUSE' }}"
+            sequence:
+              - action: script.media_center_playpause
+          - conditions: "{{ trigger.event.data.action == 'AVR_NEXT' }}"
+            sequence:
+              - action: script.media_center_next

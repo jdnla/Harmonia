@@ -1,0 +1,59 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL: full media_player entity with a live scrubber CARD in Home Assistant
+#
+# Core HA has NO template media_player platform, so this needs a HACS custom
+# integration:  "Template Media Player" by EuleMitKeule
+#   https://github.com/EuleMitKeule/template-media-player
+#
+# INSTALL
+#   1. HACS → Integrations → ⋮ → Custom repositories → add
+#        https://github.com/EuleMitKeule/template-media-player  (type: Integration)
+#   2. Install "Template Media Player", restart HA.
+#   3. Add this to configuration.yaml (or a package), adjusting entity_ids if
+#      your HA generated different ones.
+#   4. Restart HA. You'll get media_player.media_center — put it on a dashboard
+#      with a standard "Media Control" card for the scrubber + controls.
+#
+# It reuses the SAME transport scripts defined in now_playing_package.yaml
+# (script.media_center_playpause / _next / _previous), so install that first.
+#
+# Data source is automatic in the bridge: Plex API when Plex is playing (real
+# show/episode title + poster + live position), else MPRIS for Netflix/Chrome
+# (state + scrubber; Netflix has no title/art — a web-player limitation).
+# ─────────────────────────────────────────────────────────────────────────────
+
+media_player:
+  - platform: template_media_player
+    media_players:
+      media_center:
+        friendly_name: "Media Center"
+        device_class: tv
+        # state <- bridge media_state sensor (playing/paused/idle -> off)
+        value_template: >
+          {% set s = states('sensor.media_center_media_state') %}
+          {% if s in ['playing','paused','idle'] %}{{ s }}{% else %}off{% endif %}
+        attributes:
+          media_title: >
+            {{ states('sensor.media_center_media_title') }}
+          media_artist: >
+            {{ states('sensor.media_center_media_subtitle') }}
+          media_content_type: >
+            {{ states('sensor.media_center_media_type') or 'video' }}
+          media_image_url: >
+            {% set a = states('sensor.media_center_media_art') %}
+            {{ a if a not in ['', 'unknown', 'unavailable', 'None'] else '' }}
+          media_duration: >
+            {{ states('sensor.media_center_media_duration') | int(0) }}
+          media_position: >
+            {{ states('sensor.media_center_media_position') | int(0) }}
+          media_position_updated_at: >
+            {{ states.sensor.media_center_media_position.last_changed }}
+        # transport -> the scripts from now_playing_package.yaml
+        play:
+          - action: script.media_center_playpause
+        pause:
+          - action: script.media_center_playpause
+        next:
+          - action: script.media_center_next
+        previous:
+          - action: script.media_center_previous

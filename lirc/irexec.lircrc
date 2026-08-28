@@ -1,0 +1,97 @@
+# irexec configuration — maps IR remote buttons to launcher commands.
+# Installed to ~/.config/lircrc (user) so irexec runs in the user session and
+# can launch/focus GUI apps.
+#
+# Button names must match those emitted by the loaded remote config
+# (see lirc/vizio.lircd.conf: KEY_1, KEY_2, ... KEY_UP, KEY_DOWN, etc.).
+# Run `irw` to confirm the exact names your remote sends.
+#
+# LAUNCH_CMD is substituted by install.sh with the absolute path to
+# launch_app.sh (which wraps the venv python + launcher.py).
+
+# --- App launch buttons (launch-or-focus, fullscreen) ---
+begin
+    prog   = irexec
+    button = KEY_1
+    config = LAUNCH_CMD plex
+end
+
+begin
+    prog   = irexec
+    button = KEY_2
+    config = LAUNCH_CMD netflix
+end
+
+begin
+    prog   = irexec
+    button = KEY_3
+    config = LAUNCH_CMD sportsnet
+end
+
+begin
+    prog   = irexec
+    button = KEY_4
+    config = LAUNCH_CMD iptvnator
+end
+
+begin
+    prog   = irexec
+    button = KEY_0
+    config = MQTTPUB_CMD avr-tv-bridge/campopup/toggle PRESS
+end
+
+# --- PREV button -> Bigscreen home screen ---
+# PREV decodes over IR as KEY_MENU (scancode 0x58A7); it is NOT forwarded over
+# CEC, so wiring it here doesn't double-fire. navkey.sh 'home' injects
+# XF86HomePage (keycode 172), bound to "Toggle Bigscreen Home Screen".
+begin
+    prog   = irexec
+    button = KEY_MENU
+    config = NAVKEY_CMD home
+end
+
+# --- D-pad / OK / Back navigation over IR (NAV_MODE=ir only) ---
+# The installer includes this block ONLY when NAV_MODE=ir; for NAV_MODE=cec it
+# is stripped (nav comes over CEC via cecnav instead). Do not enable both — the
+# TV forwards both CEC and IR per press, which would double every input.
+# DPAD_IR_BEGIN
+begin
+    prog   = irexec
+    button = KEY_UP
+    config = NAVKEY_CMD up
+end
+begin
+    prog   = irexec
+    button = KEY_DOWN
+    config = NAVKEY_CMD down
+end
+begin
+    prog   = irexec
+    button = KEY_LEFT
+    config = NAVKEY_CMD left
+end
+begin
+    prog   = irexec
+    button = KEY_RIGHT
+    config = NAVKEY_CMD right
+end
+begin
+    prog   = irexec
+    button = KEY_OK
+    config = NAVKEY_CMD ok
+end
+begin
+    prog   = irexec
+    button = KEY_BACK
+    config = NAVKEY_CMD back
+end
+# DPAD_IR_END
+
+# --- D-pad navigation is handled over CEC, NOT IR ---
+# The TV forwards D-pad/OK/Back presses to the PC as CEC USER_CONTROL messages
+# (see src/cec_nav.py + avr-tv-bridge-cecnav.service). Because the TV sends BOTH
+# CEC and IR for every press, mapping the D-pad here too would double every
+# input. So the arrow/OK/Back buttons are deliberately NOT wired to IR — only
+# the number buttons (app launch) are, since those aren't forwarded as CEC nav.
+# If you ever disable CEC passthrough on the TV, re-add the D-pad mappings here
+# pointing at NAVKEY_CMD (navkey.sh) as the IR fallback.

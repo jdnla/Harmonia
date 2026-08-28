@@ -1,0 +1,15 @@
+[Unit]
+Description=Claim HDMI-CEC playback role on /dev/cec0
+After=graphical.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Wait for /dev/cec0 to appear (shows up after display/GPU init).
+# NOTE: do NOT add Wants=/After=dev-cec0.device — CEC nodes aren't udev-tagged
+# with systemd, so that .device unit never activates and start hangs forever.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 15); do [ -e /dev/cec0 ] && exit 0; sleep 1; done; exit 1'
+ExecStart=/usr/bin/cec-ctl -d /dev/cec0 --playback --osd-name "LinuxPC"
+
+[Install]
+WantedBy=multi-user.target

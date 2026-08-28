@@ -1,0 +1,19 @@
+[Unit]
+Description=ydotoold — virtual input device daemon (for IR D-pad key injection)
+# User service. jordan has /dev/uinput access via ACL, so no root needed.
+# Provides the socket that `ydotool` uses to inject keystrokes into the session.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# Use the source-built ydotoold in /usr/local/bin (the packaged 0.1.8's `key`
+# command is broken — emits no events). Pin an explicit socket path + ownership
+# so the client can find it; consumers set YDOTOOL_SOCKET to the same path.
+Environment=YDOTOOL_SOCKET=%t/.ydotool_socket
+ExecStart=/usr/local/bin/ydotoold -p %t/.ydotool_socket -o %U:%G
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

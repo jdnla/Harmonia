@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Netflix logomark (solid) on Netflix's black rounded-square app treatment -->
+  <rect width="256" height="256" rx="40" fill="#000000"/>
+  <rect x="78" y="40" width="28" height="176" fill="#E50914"/>
+  <rect x="150" y="40" width="28" height="176" fill="#E50914"/>
+  <polygon points="78,40 106,40 178,216 150,216" fill="#E50914"/>
+</svg>

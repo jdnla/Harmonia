@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Harmonia D-pad Navigation",
+  "version": "1.0.0",
+  "description": "Spatial (D-pad) navigation for the media center: arrow keys move an on-screen highlight to the nearest control, Enter activates it. Tuned for Netflix and Sportsnet/TSN.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyJwn3jQQ8iwTCMXcBOQvZTM6HH5Hj4TzC0JfpHVGhqjZFdo8ezAUTjLjIqVIcNuF8xKEGpSiSRFfidyplB7fMUGiO9BP/L3yDUAjm0gkPX7vf3V/MZbM2zxtJ80bAnqqSmFoeG5D9jRKDQuROiUp4bteajPfviCFEhwZY08x6rE55YstTpiewbVLvkAQ5G1jwTqIwuoQZRrCUMqZv4xalajamQ6EkS0HvykZJKp5wNP+Ze3MByyXBQH5dw6tArbppgbZKyebqKDQqJQgsYfPp694AEq90iaMgFbht1PX/jSXNSUBKMYe/sORXGzvbGttpez+L+jkh/qQdst6qlGNkQIDAQAB",
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.netflix.com/*",
+        "*://*.sportsnet.ca/*",
+        "*://*.tsn.ca/*"
+      ],
+      "js": ["spatial_nav.js"],
+      "css": ["highlight.css"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "host_permissions": [
+    "*://*.netflix.com/*",
+    "*://*.sportsnet.ca/*",
+    "*://*.tsn.ca/*"
+  ]
+}

@@ -1,0 +1,17 @@
+[Unit]
+Description=AVR-TV-Bridge app launcher (Home Assistant / MQTT) — user session
+# This is a USER service (systemctl --user). It runs inside the graphical
+# session so it can launch/focus GUI apps via kdotool. Do NOT install it as a
+# system service — it needs the Wayland/D-Bus session environment.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/avr-tv-bridge/config.env
+ExecStart=/opt/avr-tv-bridge/venv/bin/python /opt/avr-tv-bridge/src/launcher_service.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

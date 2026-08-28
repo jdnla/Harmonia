@@ -1,0 +1,9 @@
+config.env
+*.token
+vizio.token
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.swp
+.DS_Store
