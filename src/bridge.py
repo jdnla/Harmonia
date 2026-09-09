@@ -8,7 +8,7 @@ The bridge is composed from config: pick a receiver driver, a display driver, or
 becomes the audio authority if it declares volume/mute. Scenes, the power-sync
 watchdog, and HA discovery all adapt to which roles are present.
 
-Run as a systemd service on the media PC. Configuration comes from environment
+Run as a systemd service on the host. Configuration comes from environment
 variables (see config.env), loaded by the systemd unit via EnvironmentFile.
 
 Back-compat: the MQTT device-id slugs (default "denon"/"vizio") and all HA

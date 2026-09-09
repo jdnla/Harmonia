@@ -1,6 +1,6 @@
 """Match PipeWire's HDMI output channel layout to the AV receiver.
 
-Problem this solves: the media PC's PipeWire default sink defaults to
+Problem this solves: the host's PipeWire default sink defaults to
 `hdmi-stereo`, so even genuine 5.1/7.1 content is downmixed to 2.0 before it
 leaves the PC and the Denon has to fake surround with its upmixer. This helper
 selects the receiver's maximum supported HDMI surround profile whenever the

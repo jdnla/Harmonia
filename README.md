@@ -1,8 +1,5 @@
 # Harmonia
 
-*(formerly `avr-tv-bridge` — the repo/service keep that name for back-compat;
-the MQTT/HA discovery prefix is unchanged so existing entities are preserved.)*
-
 A self-hosted media-center integration for a Linux HTPC running **KDE Plasma
 (Wayland)** and **Home Assistant**. It bridges an AV receiver and/or a TV into
 Home Assistant over MQTT, and turns the box into a remote-controllable media
@@ -22,7 +19,7 @@ declare what you have in config and the bridge composes itself:
 | App control      | KWin (via `kdotool`) + `ydotool` | KDE Plasma Wayland |
 | Camera popup     | any `mpv`-playable stream        | Frigate/go2rtc, or any RTSP/HTTP source |
 
-> **Tested on:** Denon AVR-X1800H, Vizio P65Q9-H1, Ubuntu 26.04 / KDE Plasma 6,
+> **Reference hardware:** Denon AVR-X1800H, Vizio P65Q9-H1, Ubuntu 26.04 / KDE Plasma 6,
 > a USB-UIRT, and Frigate.
 
 ## Driver model (mix-and-match hardware)
@@ -48,13 +45,13 @@ Supported setups out of the box:
 **Adding hardware** is a drop-in plugin — scaffold it, don't hand-write it:
 
 ```
-python3 setup/harmonia_driver.py new receiver yamaha   # creates src/drivers/yamaha_driver.py
+python3 setup/harmonia_driver.py new receiver yamaha   # creates src/drivers/yamaha/
 python3 setup/harmonia_driver.py list                  # see registered drivers + their hooks
 ```
 
 The scaffold subclasses `AVReceiver`/`Display` (see `drivers/base.py`), registers
 itself with `@register_receiver/@register_display`, and stubs `from_env`,
-`get_state`, the commands, and an optional `discover()` hook with TODO markers.
+`get_state`, the commands, and an optional `discover()` hook with placeholder methods.
 Any `*_driver.py` in `src/drivers/` **auto-loads** — no `__init__.py` edit, no
 bridge changes. `denon_driver.py` / `vizio_driver.py` are the reference
 implementations. Optional per-driver hooks: `discover(ssdp_results)` (makes it
@@ -68,7 +65,7 @@ everything (it wraps the venv python so the tools always have their deps):
 
 ```
 harmonia setup                     # guided discovery + config wizard
-harmonia doctor                    # read-only health check (fixes per red line)
+harmonia doctor                    # read-only health check
 harmonia status                    # concise up/down of all three services
 harmonia start|stop|restart [tgt]  # all services, or one: bridge|launcher|cecnav
 harmonia logs [-f] [tgt]           # journal for a service (default: bridge)
@@ -145,7 +142,7 @@ repeat decoding. If your TV doesn't do CEC passthrough, D-pad can fall back to I
 > **ydotool is built from source.** Some distros package a `ydotool` whose `key`
 > command emits no events; `setup/build_ydotool.sh` builds a working one to
 > `/usr/local/bin`. The installer runs this and masks any packaged
-> `ydotool.service` (it would fight our daemon over `/dev/uinput`).
+> `ydotool.service` (it would fight the daemon over `/dev/uinput`).
 
 ## Install
 
@@ -173,7 +170,7 @@ Then configure:
    ```bash
    cp config.env.example ~/.config/avr-tv-bridge/config.env   # installer does this too
    ```
-   Set your MQTT credentials, the receiver/TV IPs, the scene's default inputs,
+   Set your MQTT credentials, the receiver/TV addresses, the scene's default inputs,
    and any optional features. Every setting is documented in the file.
 2. If your TV needs pairing (Vizio SmartCast does), run its one-time pairing —
    a PIN appears on the TV:
@@ -210,7 +207,7 @@ All settings live in `config.env` (see `config.env.example` for the full list):
 - **Camera popup** — set `CAM_POPUP_TRIGGER_TOPIC` (any topic publishing a count,
   e.g. Frigate's `frigate/<camera>/person`) and `CAM_POPUP_STREAM_URL` (any
   `mpv`-playable URL; a go2rtc HTTP endpoint avoids embedding camera creds).
-  Window placement is best set with a KWin rule — see `TODO.md`.
+  Window placement is best set with a KWin rule.
 - **Receiver volume display offset** — `DENON_VOLUME_OFFSET` so HA matches the
   number on the receiver's on-screen display, if they differ.
 - **Power-sync** — `SYNC_POWER=1` (default) keeps the receiver following the TV.
@@ -251,7 +248,6 @@ src/
 setup/    pair_vizio.py, build_ydotool.sh
 systemd/  bridge, cec-playback, launcher, cecnav, ydotoold units
 lirc/     IR device driver options, remote config, irexec.lircrc
-kwin/     camera-popup.kwinrule (reference; set the rule via GUI — see TODO)
 install.sh              system bridge + CEC + IR
 install-launcher.sh     user launcher + CEC nav + ydotool + media + camera
 config.env.example      all settings, documented
@@ -266,7 +262,5 @@ Makefile                deploy / rebuild-venv / status / logs
   mute). Swap in a client for your brand and wire it up in `src/bridge.py`.
 - **No CEC passthrough on your TV:** map the D-pad buttons in `lirc/irexec.lircrc`
   to `navkey.sh` to drive navigation over IR instead.
-- **Different remote:** record it with `irrecord` and drop the config in
-  `lirc/`. The repo's config is a canonical NEC layout you can adapt.
 
 Secrets (`config.env`, `*.token`) are gitignored.

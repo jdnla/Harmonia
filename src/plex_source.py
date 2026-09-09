@@ -10,7 +10,7 @@ player's LAN address) and returns a normalized snapshot the bridge can publish.
 Stdlib only (urllib + ElementTree) — no plexapi dependency in the venv.
 
 Config (config.env):
-  PLEX_BASE_URL      e.g. http://192.168.1.7:32400   (required to enable)
+  PLEX_BASE_URL      e.g. http://192.0.2.7:32400   (required to enable)
   PLEX_TOKEN         X-Plex-Token for the server      (required; SECRET)
   PLEX_PLAYER_ADDRESS  LAN IP of this HTPC's Plex client, to pick our own
                      session out of all sessions. Default: auto (this host's
@@ -50,7 +50,7 @@ def _this_host_ip() -> str:
     try:
         # No traffic actually sent; just picks the outbound interface.
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("192.168.1.7", 80))  # PMS host; any LAN addr works
+        s.connect(("192.0.2.7", 80))  # PMS host; any LAN addr works
         ip = s.getsockname()[0]
         s.close()
         return ip

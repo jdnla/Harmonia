@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install.sh — provision a media PC to bridge a Denon AVR + Vizio SmartCast TV
+# install.sh — provision a host to bridge a Denon AVR + Vizio SmartCast TV
 # to Home Assistant over MQTT, and set up HDMI-CEC and USB-UIRT IR control.
 #
 # Idempotent: safe to re-run. It installs packages, lays down systemd services,
@@ -65,6 +65,17 @@ chown -R "$RUN_USER":"$RUN_USER" "$INSTALL_DIR"
 # ---- 2b. harmonia CLI -----------------------------------------------------
 log "Installing 'harmonia' command to /usr/local/bin"
 install -m 755 "$REPO_DIR/setup/harmonia" /usr/local/bin/harmonia
+
+# ---- 2b2. keyboard power hotkeys (Meta+F11 On / Meta+F12 Off) --------------
+# Runs as the unprivileged user (writes ~/.config + ~/.local/share). Live
+# registration needs a running session, so during install it just writes the
+# config; it activates at next login (or run `harmonia hotkeys` in-session).
+if [[ -f "$REPO_DIR/setup/register_hotkeys.sh" ]]; then
+  log "Registering keyboard power hotkeys for $RUN_USER"
+  sudo -u "$RUN_USER" HOME="$RUN_HOME" INSTALL_DIR="$INSTALL_DIR" \
+    bash "$REPO_DIR/setup/register_hotkeys.sh" || \
+    echo "   -> hotkey registration skipped (run 'harmonia hotkeys' in-session)"
+fi
 
 # ---- 2c. Chrome D-pad extension (force-install via managed policy) ---------
 # Google Chrome ignores --load-extension, so we pack the extension to a signed

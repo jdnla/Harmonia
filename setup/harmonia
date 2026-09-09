@@ -10,6 +10,7 @@
 #   harmonia list                  # list registered device drivers
 #   harmonia driver new <role> <n> # scaffold a new driver plugin
 #   harmonia pair <tv_ip>          # pair a Vizio SmartCast TV
+#   harmonia hotkeys               # (re)register Meta+F11/F12 power on/off keys
 #   harmonia start|stop|restart [target]   # all services, or one:
 #                                  #   bridge (system) | launcher | cecnav (user)
 #   harmonia status                # concise health of all services
@@ -104,6 +105,9 @@ case "$cmd" in
   pair)
     [[ $# -ge 1 ]] || { echo "usage: harmonia pair <tv_ip>" >&2; exit 2; }
     py pair_vizio.py "$@" ;;
+  hotkeys)
+    warn_root hotkeys
+    bash "$SETUP_DIR/register_hotkeys.sh" "$@" ;;
   start|stop|restart)
     lifecycle "$cmd" "${1:-}" ;;
   status)

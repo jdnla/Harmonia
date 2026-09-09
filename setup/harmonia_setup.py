@@ -202,7 +202,7 @@ def step_mqtt():
     hc.head("5. MQTT broker (Home Assistant)")
     existing = hc.read_env_file()
     env = {}
-    env["MQTT_HOST"] = hc.ask("MQTT host", existing.get("MQTT_HOST", "192.168.1.7"))
+    env["MQTT_HOST"] = hc.ask("MQTT host", existing.get("MQTT_HOST", "192.0.2.7"))
     env["MQTT_PORT"] = hc.ask("MQTT port", existing.get("MQTT_PORT", "1883"))
     env["MQTT_USER"] = hc.ask("MQTT user", existing.get("MQTT_USER", "harmonia"))
     env["MQTT_PASS"] = hc.ask("MQTT password", existing.get("MQTT_PASS", ""))

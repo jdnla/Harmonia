@@ -27,7 +27,7 @@ BASE = "avr-tv-bridge"
 # Denon, the Vizio, and — from launcher_service — the launch buttons) attach to,
 # so everything shows up under one "Media Center" device in HA. Entities keep
 # their own unique_ids; only the device grouping is unified.
-DEVICE_ID = f"{BASE}_mediacenter"
+DEVICE_ID = f"{BASE}_host"
 DEVICE_NAME = "Media Center"
 
 

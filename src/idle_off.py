@@ -26,6 +26,7 @@ import time
 
 from session_env import graphical_env
 import media_control
+from input_activity import InputActivity
 
 log = logging.getLogger("idle_off")
 
@@ -73,6 +74,11 @@ class IdleOff:
         # screen for its full timeout even though the power-off was aborted —
         # which looks exactly like "the timeout didn't clear").
         self._warn_toast = None
+        # Independent input tracker (watches /dev/input directly). swayidle can go
+        # deaf and stop seeing input entirely, causing a false timeout even while
+        # the user presses the remote/keyboard. This is the reliable fallback we
+        # cross-check before ever powering off.
+        self._input = InputActivity()
 
     # ---- HA toggle ----
     def set_enabled(self, on: bool):
@@ -112,6 +118,7 @@ class IdleOff:
     # ---- lifecycle ----
     def start(self):
         self._last_sway_event = time.monotonic()
+        self._input.start()   # begin watching real input devices
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         # Watchdog respawns swayidle if it goes stale (see _watchdog).
@@ -124,6 +131,7 @@ class IdleOff:
             self._sway.terminate()
         self._cancel_warning()
         self._stop_resume_watcher()
+        self._input.stop()
 
     # ---- warning countdown state ----
     def _cancel_warning(self):
@@ -277,6 +285,23 @@ class IdleOff:
     def _on_input_idle(self):
         if not self._enabled:
             return
+        # CROSS-CHECK real input: swayidle can go deaf and fire a bogus IDLE even
+        # while the user is pressing the remote/keyboard. Our independent input
+        # watcher sees /dev/input directly, so if there was genuine input within
+        # the idle window, this IDLE is false — defer and respawn swayidle so it
+        # re-arms with a fresh (working) listener.
+        if self._input.active:
+            since = self._input.seconds_since_last()
+            if since < self.timeout_secs:
+                log.warning("swayidle reported IDLE but real input was %.0fs ago "
+                            "(< %ds) — false idle (deaf swayidle); deferring + "
+                            "respawning", since, self.timeout_secs)
+                if self._sway is not None and self._sway.poll() is None:
+                    try:
+                        self._sway.terminate()  # _run respawns a fresh one
+                    except Exception:
+                        pass
+                return
         # Input has been idle for `timeout_secs`. If media is playing, this is
         # NOT inactivity — defer (swayidle stays armed and will fire again on the
         # next idle period after playback stops / input resumes).

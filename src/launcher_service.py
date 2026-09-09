@@ -5,7 +5,7 @@ Runs as a *user* service (inside the KDE session, so it can launch/focus GUI
 apps). It:
   - subscribes to launch-command topics on the MQTT broker,
   - publishes Home Assistant MQTT Discovery *buttons* so each app appears in HA
-    (press to launch/focus on the media PC),
+    (press to launch/focus on the host),
   - shares the same Launcher logic used by the irexec CLI path.
 
 This complements the system-level avr-tv-bridge (AVR/TV control): that one runs
@@ -23,6 +23,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 import paho.mqtt.client as mqtt
 
@@ -99,10 +100,13 @@ class LauncherService:
         # (TV+AVR off; PC stays on). Enabled by default; HA toggle + IDLE_OFF_*
         # env to tune. See config.env.example.
         # HA notification toasts (MQTT-driven; Bigscreen has no notification
-        # server so we render our own layer-shell overlay). Always available;
+        # server so the launcher renders its own layer-shell overlay). Always available;
         # only shows what HA explicitly publishes to NOTIFY_TOPIC.
         self.notify = NotifyPopup()
         self.notify_topic = env("NOTIFY_TOPIC", "avr-tv-bridge/notify")
+        # Debounce the "Closed X" toast so a held-IR close (repeat frames) or a
+        # double-tap doesn't stack multiple identical toasts.
+        self._last_close_toast: dict[str, float] = {}
 
         self.idle_off = None
         if env("IDLE_OFF_ENABLE", "1") not in ("0", "false", "False", ""):
@@ -160,6 +164,7 @@ class LauncherService:
         client.publish(AVAIL_TOPIC, "online", retain=True)
         self._publish_discovery()
         client.subscribe(CMD_WILDCARD)
+        client.subscribe(f"{BASE}/close/+/set")   # close-one-app commands
         client.subscribe(f"{BASE}/display/wake")
         client.subscribe(f"{BASE}/home/set")
         client.subscribe(self.notify_topic)
@@ -200,7 +205,7 @@ class LauncherService:
         # Attach the launch buttons to the SAME shared Media Center device the
         # bridge uses, so all controls live under one HA device.
         hub = {
-            "identifiers": [f"{BASE}_mediacenter"],
+            "identifiers": [f"{BASE}_host"],
             "name": "Media Center",
             "model": "avr-tv-bridge",
             "manufacturer": "self-hosted",
@@ -231,7 +236,7 @@ class LauncherService:
                 "icon": "mdi:monitor-shimmer",
             }, separators=(",", ":")), retain=True)
 
-        # "Home Screen" button — return the media PC to the Bigscreen home
+        # "Home Screen" button — return the host to the Bigscreen home
         # screen (injects XF86HomePage via navkey.sh, same as the PREV remote
         # button). Works from the phone dashboard too.
         self.client.publish(
@@ -519,6 +524,32 @@ class LauncherService:
                 client.publish(f"{BASE}/launch/{app}/state", result, retain=False)
             except Exception as e:
                 log.exception("Launch %s failed: %s", app, e)
+            return
+        # avr-tv-bridge/close/<app>/set — close ONE app (dashboard button or the
+        # IR hold-to-close). Idempotent: repeated presses (or held-IR repeats)
+        # after it's gone are harmless no-ops.
+        if len(parts) == 4 and parts[1] == "close" and parts[3] == "set":
+            app = parts[2]
+            log.info("Close command: %s", app)
+            try:
+                result = self.launcher.close(app)
+                client.publish(f"{BASE}/close/{app}/state", result, retain=False)
+                # On-screen confirmation, only when we actually closed something
+                # (not for a no-op 'not-running' — and dedupe held-IR repeats so
+                # a hold doesn't stack toasts).
+                if result == "closed":
+                    label = APPS.get(app, {}).get("label", app.title())
+                    now = time.monotonic()
+                    if now - self._last_close_toast.get(app, 0) > 3:
+                        self._last_close_toast[app] = now
+                        try:
+                            self.notify.show("Media Center", f"Closed {label}",
+                                             "", timeout=2.5)
+                        except Exception as e:
+                            log.debug("close toast failed: %s", e)
+            except Exception as e:
+                log.exception("Close %s failed: %s", app, e)
+            return
 
     # D-pad buttons HA/phone can request. navkey.sh maps these to the same
     # keycodes cec_nav uses for the physical remote AND consults nav_profiles
@@ -538,7 +569,7 @@ class LauncherService:
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _go_home(self):
-        """Bring the media PC to the Bigscreen home screen by injecting
+        """Bring the host to the Bigscreen home screen by injecting
         XF86HomePage, reusing navkey.sh so the keycode has one source of truth
         (same path the PREV remote button uses)."""
         navkey = os.path.join(os.path.dirname(os.path.abspath(__file__)), "navkey.sh")
