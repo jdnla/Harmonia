@@ -36,17 +36,31 @@ log = logging.getLogger("launcher")
 # launch_wait: max seconds to wait for the window to appear after launching,
 #              so we can fullscreen it.
 # Default AV source for launched apps: the host is on the AVR's MPLAY input
-# and the TV's HDMI-1. When an app is launched via a remote NUMBER button, the
-# launcher nudges the AVR/TV back to this source IF a device is powered on but on
-# the wrong input (see source_sync.ensure_source — only acts when actually
-# wrong, never touches power). Override per-app by giving that app its own
-# "source" dict (e.g. a future button that wants a different AVR source):
+# and whichever TV input the bridge has AUTO-DETECTED (see _default_source).
+# When an app is launched via a remote NUMBER button, the launcher nudges the
+# AVR/TV back to this source IF a device is powered on but on the wrong input
+# (see source_sync.ensure_source — only acts when actually wrong, never touches
+# power). Override per-app by giving that app its own "source" dict (e.g. a
+# future button that wants a different AVR source):
 #   "source": {"avr": "GAME", "tv": "HDMI-2"}
-# Keys are optional: include only the device you want corrected.
-DEFAULT_SOURCE = {
-    "avr": os.environ.get("SCENE_AVR_INPUT", "MPLAY"),
-    "tv": os.environ.get("SCENE_TV_INPUT", "HDMI-1"),
-}
+# Keys are optional: include only the device you want corrected. A per-app
+# "source" bypasses TV auto-detection (it's an explicit choice).
+_FALLBACK_TV_INPUT = os.environ.get("SCENE_TV_INPUT", "HDMI-1")
+
+
+def _default_source() -> dict:
+    """Build the default AV source at launch time.
+
+    The TV input is read from the bridge's detected value (retained MQTT
+    topic) so it follows the physical wiring instead of a hardcoded HDMI port;
+    it falls back to SCENE_TV_INPUT if the bridge hasn't published. Resolved
+    per-launch (not at import) because the irexec/CLI path doesn't load
+    config.env before import, and the wiring can change between launches.
+    """
+    return {
+        "avr": os.environ.get("SCENE_AVR_INPUT", "MPLAY"),
+        "tv": source_sync.retained_tv_input(_FALLBACK_TV_INPUT),
+    }
 
 # Per-app Chrome profile dirs live here. Each Chrome --app gets its own so it's
 # an independent process (see the chrome_app apps below).
@@ -296,10 +310,10 @@ class Launcher:
 
         # Correct the AV source in the background (only acts if a device is on
         # the wrong input; never touches power). Fires for both launch and
-        # focus so switching back to an app also fixes the source. Per-app
-        # "source" overrides DEFAULT_SOURCE.
+        # focus so switching back to an app also fixes the source. A per-app
+        # "source" overrides the auto-detected default.
         if sync_source:
-            src = spec.get("source", DEFAULT_SOURCE)
+            src = spec.get("source") or _default_source()
             try:
                 self._source_thread = source_sync.ensure_source_async(src)
             except Exception as e:

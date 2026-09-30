@@ -96,6 +96,15 @@ class VizioDisplay(Display):
     def set_input(self, src: str) -> None:
         self._c.set_input(src)
 
+    def list_named_inputs(self) -> list[tuple[str, str]]:
+        """[(hardware_name, friendly_name)] for each input (read-only).
+
+        Lets the bridge auto-detect which physical input the media-center
+        chain is on by matching the receiver's CEC name, instead of trusting
+        a hardcoded HDMI port. Returns [] if the TV is unreachable.
+        """
+        return self._c.list_named_inputs()
+
     def set_volume(self, vol: float) -> None:
         self._c.set_volume(int(vol))
 

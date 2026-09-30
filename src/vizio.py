@@ -117,6 +117,28 @@ class VizioClient:
             return False
         return self._put(CURRENT_INPUT, {"REQUEST": "MODIFY", "VALUE": name, "HASHVAL": h})
 
+    def list_named_inputs(self) -> list[tuple[str, str]]:
+        """Return [(hardware_name, friendly_name)] for every input.
+
+        The SmartCast `name_input` endpoint lists each input's fixed hardware
+        NAME (e.g. "HDMI-2" — the value accepted by set_input) alongside its
+        VALUE.NAME, the friendly label the TV shows. When a CEC device is
+        connected the TV renames that input to the device's OSD name, so e.g.
+        the receiver appears as ("HDMI-2", "AVR-X1800H"). Read-only; returns []
+        on any error so callers can fall back safely.
+        """
+        data = self._get(INPUT_LIST)
+        out: list[tuple[str, str]] = []
+        if not data:
+            return out
+        for item in data.get("ITEMS", []):
+            hw = item.get("NAME")
+            val = item.get("VALUE")
+            friendly = val.get("NAME") if isinstance(val, dict) else val
+            if hw:
+                out.append((hw, friendly or ""))
+        return out
+
     def set_volume(self, pct: int) -> bool:
         h, cur = self._get_item(f"{AUDIO_ROOT}/volume")
         if h is None:
