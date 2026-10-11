@@ -186,9 +186,24 @@ APPS: dict[str, dict] = {
         # radeonsi/swrast", so Electron can't make a GL context and never maps a
         # window. XWayland is the working path (input/fullscreen all fine).
         # fullscreen=True: the launcher forces it fullscreen after it maps.
+        # Installed from the official .deb (/opt/IPTVnator), NOT the snap. The
+        # snap was stuck in software rendering (laggy) — its confined GL stack
+        # couldn't init a GPU context (ANGLE error 12289 / Vulkan missing ext on
+        # every --use-gl path), while the .deb runs unconfined against the host
+        # mesa/radeonsi and gets real hardware acceleration. Runs under XWayland
+        # (--ozone-platform=x11, the vendor default). Dedup relies on the PROCESS
+        # check, not the window: it's an XWayland window and kdotool (a) panics
+        # on KWin's /Scripting and (b) can't see XWayland windows, so
+        # find_window() returns None. The proc regex matches the Electron main +
+        # helper processes (/opt/IPTVnator/iptvnator.bin ...).
         "match": [("class", r"(?i)^iptvnator$")],
-        "launch": ["snap", "run", "iptvnator"],
-        "proc": r"iptvnator/.*/iptvnator\.bin",
+        "launch": ["/opt/IPTVnator/iptvnator", "--ozone-platform=x11"],
+        "proc": r"iptvnator\.bin",
+        # Snap cold-start (mount + apparmor + Electron) can exceed the default
+        # 12s cooldown before the process is visible to pgrep, which let a second
+        # tile/remote press spawn a duplicate. 30s covers the worst-case cold
+        # start so re-presses focus (via proc) instead of launching again.
+        "cooldown": 30,
         "fullscreen": True,
         "launch_wait": 25,
     },
@@ -211,7 +226,10 @@ class Launcher:
             return ""
 
     def _all_windows(self) -> list[str]:
-        out = self._kdo("search", "")
+        # kdotool v0.3.0's empty pattern ("") matches NOTHING; "." matches any
+        # window with a non-empty name/class (i.e. every real app window), which
+        # is what we want to enumerate before filtering by the per-app regex.
+        out = self._kdo("search", ".")
         return [w for w in out.splitlines() if w.strip()]
 
     def _window_attr(self, wid: str, attr: str) -> str:
@@ -385,12 +403,28 @@ class Launcher:
             self._kill_chrome_profile(app_key, "-KILL")
             log.info("%s closed (isolated profile killed)", app_key)
             return "closed"
+        # Non-Chrome app: prefer a graceful window close, but NEVER rely on the
+        # window manager alone — kdotool is unreliable here (panics on KWin's
+        # /Scripting, and can't see XWayland windows like IPTVnator), so
+        # find_window() often returns None even when the app is up. Fall back to
+        # killing the app's process by its unique proc pattern (TERM then KILL).
         wid = self.find_window(app_key)
-        if not wid:
-            return "not-running"
-        self._kdo("windowclose", wid)
-        log.info("%s window closed", app_key)
-        return "closed"
+        if wid:
+            self._kdo("windowclose", wid)
+            log.info("%s window closed", app_key)
+            return "closed"
+        pat = spec.get("proc")
+        if pat and self._proc_running(app_key):
+            try:
+                subprocess.run(["pkill", "-TERM", "-f", pat], timeout=5)
+                time.sleep(1.5)
+                if self._proc_running(app_key):
+                    subprocess.run(["pkill", "-KILL", "-f", pat], timeout=5)
+                log.info("%s closed (process killed via %r)", app_key, pat)
+                return "closed"
+            except (OSError, subprocess.SubprocessError) as e:
+                log.warning("close %s via pkill failed: %s", app_key, e)
+        return "not-running"
 
     def _chrome_profile_running(self, app_key: str) -> bool:
         profile = APPS.get(app_key, {}).get("profile")
@@ -409,10 +443,25 @@ class Launcher:
 
     # Seconds after a launch during which we will NOT launch the same app again.
     # Covers the startup gap: between Popen and the app's process/window becoming
-    # detectable (snap/Chrome take 1-3s), a second button press would otherwise
-    # pass the "not running" check and spawn a duplicate. A stamp file written
-    # under the lock closes that gap. Configurable via LAUNCH_COOLDOWN_SECS.
+    # detectable, a second button press would otherwise pass the "not running"
+    # check and spawn a duplicate. A stamp file written under the lock closes
+    # that gap. This cooldown is the PRIMARY duplicate guard for slow-starting
+    # apps because window detection (kdotool) is unreliable here — it talks to
+    # KWin's /Scripting over D-Bus and currently panics, and it can't see
+    # XWayland windows (e.g. IPTVnator) at all — so find_window() silently
+    # returns None and only the process check + this cooldown stand between a
+    # double-press and a duplicate. Snap cold-starts (mount+apparmor+Electron)
+    # can take >12s before the process is even visible to pgrep, so apps that
+    # cold-start slowly set a longer per-app "cooldown". Global default via
+    # LAUNCH_COOLDOWN_SECS.
     _LAUNCH_COOLDOWN = float(os.environ.get("LAUNCH_COOLDOWN_SECS", "12"))
+
+    def _cooldown_for(self, app_key: str) -> float:
+        """Per-app launch cooldown (falls back to the global default)."""
+        try:
+            return float(APPS[app_key].get("cooldown", self._LAUNCH_COOLDOWN))
+        except (TypeError, ValueError):
+            return self._LAUNCH_COOLDOWN
 
     def _recent_launch(self, app_key: str) -> bool:
         """True if this app was launched within the cooldown window (its startup
@@ -422,7 +471,7 @@ class Launcher:
             age = time.time() - os.path.getmtime(stamp)
         except OSError:
             return False
-        return age < self._LAUNCH_COOLDOWN
+        return age < self._cooldown_for(app_key)
 
     def _mark_launched(self, app_key: str):
         stamp = f"{self._runtime_dir()}/avr-launch-{app_key}.stamp"
