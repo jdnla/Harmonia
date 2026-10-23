@@ -123,6 +123,30 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
   echo; die "Missing required tools:$(printf '\n  - %s' "${MISSING[@]}")"
 fi
 
+# ---- 2d. appliance hardening ----------------------------------------------
+# Retire the system cec-playback.service: the cecnav user service (installed
+# below) claims the CEC playback role + OSD name itself — identical cec-ctl
+# command, but with retries and self-healing on display re-init — so the
+# boot-time oneshot is redundant (and on some boots it never started, lingering
+# as a dead unit). Safe to skip if the unit isn't present.
+if systemctl list-unit-files cec-playback.service >/dev/null 2>&1 \
+   && [ -n "$(systemctl list-unit-files cec-playback.service --no-legend 2>/dev/null)" ]; then
+  sudo systemctl disable --now cec-playback.service 2>/dev/null \
+    && log "Disabled redundant cec-playback.service (cecnav owns the CEC role)" || true
+fi
+# KDE Discover intermittently crashes on SHUTDOWN in its Snap backend
+# (snap-backend.so — a use-after-free during ResourcesModel/QObject teardown),
+# dumping ~200MB /var/crash files. This is NOT a GPU bug: the coredump's
+# libgallium frames are just idle Mesa worker threads; hardware GL works fine
+# (radeonsi GL 4.6). Remove the snap backend — Discover keeps managing apt /
+# flatpak / fwupd on hardware rendering, and snaps still work via snapd (they're
+# just not browsable in Discover's GUI). Definitive fix for the actual crash.
+if dpkg -s plasma-discover-backend-snap >/dev/null 2>&1; then
+  sudo apt-get remove -y plasma-discover-backend-snap >/dev/null 2>&1 \
+    && log "Removed plasma-discover-backend-snap (crashed Discover on teardown)" \
+    || warn "could not remove plasma-discover-backend-snap (Discover may crash on exit)"
+fi
+
 # ---- 3. install code + venv ----------------------------------------------
 # Reuse the system install dir if present; else create a user-owned one.
 if [ ! -d "$INSTALL_DIR" ]; then

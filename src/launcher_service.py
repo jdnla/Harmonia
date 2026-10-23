@@ -34,6 +34,7 @@ from camera_popup import CameraPopup
 from idle_off import IdleOff
 from notify_popup import NotifyPopup
 from channel_sync import ChannelSync
+from chime import ChimePlayer
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -108,6 +109,73 @@ class LauncherService:
         # double-tap doesn't stack multiple identical toasts.
         self._last_close_toast: dict[str, float] = {}
 
+        # Receiver (Denon) power state, tracked from its retained MQTT topic.
+        # Shared by the chime (skip waking the amp when it's already on) and the
+        # adaptive idle timeout (a fresh OFF->ON power-on starts the short window).
+        self._denon_id = env("MQTT_RECEIVER_ID", "denon")
+        self._denon_power = None     # ON / OFF / None (unknown)
+        # When the chime itself wakes the amp, the resulting OFF->ON must NOT be
+        # treated as a user power-on (it would start the short idle window and
+        # power everything off right after the ping). Set to a short deadline
+        # around a chime-wake so the transition handler can tell them apart.
+        self._chime_wake_until = 0.0
+
+        # Attention chime: a soft sound played on the AVR to gently get someone's
+        # attention from HA (a dashboard button). Plays ~4s then stops on its own;
+        # re-pressing restarts it. If the amp is off when it fires we wake it (and
+        # route to the PC input) so it's heard, and leave it on afterward.
+        self.chime = None
+        if env("CHIME_ENABLE", "1") not in ("0", "false", "False", ""):
+            self.chime = ChimePlayer(
+                sound=env("CHIME_SOUND",
+                          "/usr/share/sounds/freedesktop/stereo/complete.oga"),
+                repeat=int(env("CHIME_REPEAT", "3")),
+                gap_ms=int(env("CHIME_GAP_MS", "400")),
+                sink=env("CHIME_SINK", ""),
+                player=env("CHIME_PLAYER", "paplay"),
+                volume=int(env("CHIME_VOLUME", "32768")),  # ~50% = soft
+            )
+            self._chime_amp_on = env("CHIME_AMP_ON", "1") \
+                not in ("0", "false", "False", "")
+            self._chime_amp_input = env("CHIME_AMP_INPUT",
+                                        env("SCENE_AVR_INPUT", "MPLAY"))
+            # Also steer the amp onto CHIME_AMP_INPUT when it's already ON but on
+            # another source (e.g. you switched the system on yourself and it's
+            # sitting on TV/CD audio). Without this the chime plays into a source
+            # nobody hears. Set 0 to leave the input alone unless we wake the amp.
+            self._chime_input_sync = env("CHIME_AMP_INPUT_SYNC", "1") \
+                not in ("0", "false", "False", "")
+            # Max seconds to wait for the amp to CONFIRM power=ON (polled over
+            # telnet, returns as soon as it's up) + a settle for the HDMI audio
+            # link — so the chime never starts while the amp is still waking or
+            # switching inputs (which would swallow the first notes).
+            self._chime_amp_wait = float(env("CHIME_AMP_WAIT", "8.0"))
+            self._chime_amp_settle = float(env("CHIME_AMP_SETTLE", "4.0"))
+            # On a cold amp-wake, play extra repeats (the amp's HDMI audio can take
+            # a few seconds to pass sound after it reports power=ON).
+            self._chime_cold_extra = int(env("CHIME_COLD_EXTRA_REPEAT", "2"))
+            # Suppress idle auto-off for this long after a chime, so a ping never
+            # cascades into a power-off (the amp returns to standby on its own via
+            # the power-sync watchdog if the TV stays off).
+            self._chime_idle_defer = float(env("CHIME_IDLE_DEFER", "180"))
+            # Direct Denon telnet client to confirm the amp is really ON (and on
+            # the PC input) before playing — the retained MQTT state lags the
+            # bridge's poll by up to POLL_INTERVAL, which made a just-powered-on
+            # amp look cold and delayed the chime. Best-effort: without it we fall
+            # back to the MQTT cache and a fixed wait.
+            self._chime_denon = None
+            denon_host = env("DENON_HOST", "")
+            if denon_host:
+                try:
+                    from denon import DenonClient
+                    self._chime_denon = DenonClient(denon_host)
+                except Exception as e:
+                    log.warning("chime: no direct Denon client (%s); using the "
+                                "MQTT state + a fixed wait instead", e)
+            else:
+                log.warning("chime: DENON_HOST not set; using the MQTT state + a "
+                            "fixed wait instead of a direct amp check")
+
         self.idle_off = None
         if env("IDLE_OFF_ENABLE", "1") not in ("0", "false", "False", ""):
             self.idle_off = IdleOff(
@@ -115,6 +183,10 @@ class LauncherService:
                 timeout_secs=int(env("IDLE_OFF_TIMEOUT", "1800")),
                 warn_secs=int(env("IDLE_OFF_WARN", "60")),
                 notifier=self.notify,   # warning shown as a toast, not kdialog
+                # Adaptive: power on untouched -> short window; first use -> full.
+                short_timeout_secs=int(env("IDLE_OFF_SHORT_TIMEOUT", "300")),
+                adaptive=env("IDLE_OFF_ADAPTIVE", "1")
+                    not in ("0", "false", "False", ""),
             )
 
         # AVR channel-sync: match the HDMI output profile (stereo/5.1/7.1) to the
@@ -200,6 +272,14 @@ class LauncherService:
                           "ON" if self.channel_sync.enabled else "OFF",
                           retain=True)
             self.channel_sync.start()
+        # Attention chime: momentary button + track the receiver's power state so
+        # we only wake the amp when it's actually off.
+        if self.chime is not None:
+            client.subscribe(f"{BASE}/chime/set")
+        # Track the receiver's power state for the chime (skip-wake) AND the
+        # adaptive idle timeout (OFF->ON -> short window).
+        if self.chime is not None or self.idle_off is not None:
+            client.subscribe(f"{BASE}/{self._denon_id}/power/state")
 
     def _publish_discovery(self):
         # Attach the launch buttons to the SAME shared Media Center device the
@@ -404,6 +484,19 @@ class LauncherService:
                     "device": hub,
                     "icon": "mdi:surround-sound",
                 }, separators=(",", ":")), retain=True)
+        # Attention chime momentary button.
+        if self.chime is not None:
+            self.client.publish(
+                f"{DISCOVERY_PREFIX}/button/{BASE}_launcher/chime/config",
+                json.dumps({
+                    "name": "Attention Chime",
+                    "unique_id": f"{BASE}_chime",
+                    "command_topic": f"{BASE}/chime/set",
+                    "payload_press": "PRESS",
+                    "availability": [{"topic": AVAIL_TOPIC}],
+                    "device": hub,
+                    "icon": "mdi:bell-ring-outline",
+                }, separators=(",", ":")), retain=True)
         log.info("Published discovery for %d launch buttons + wake + media",
                  len(APPS))
 
@@ -422,6 +515,32 @@ class LauncherService:
             return
 
         parts = msg.topic.split("/")
+        # Cache the receiver's power state (chime skip-wake) and detect a fresh
+        # OFF->ON power-on to restart the adaptive short idle window.
+        if (len(parts) == 4 and parts[1] == self._denon_id
+                and parts[2] == "power" and parts[3] == "state"):
+            newp = msg.payload.decode("utf-8", "ignore").strip().upper()
+            prev = self._denon_power
+            self._denon_power = newp
+            if newp == "ON" and prev == "OFF" and self.idle_off is not None:
+                if time.monotonic() < self._chime_wake_until:
+                    # One-shot: consume the marker so a REAL power-on later in
+                    # the 20s window still starts the short idle window.
+                    self._chime_wake_until = 0.0
+                    log.info("power-on was a chime wake — not starting short "
+                             "idle window")
+                else:
+                    try:
+                        self.idle_off.on_power_on()
+                    except Exception as e:
+                        log.debug("idle on_power_on failed: %s", e)
+            return
+        # avr-tv-bridge/chime/set  -> soft attention chime (wake amp if off, play)
+        if (self.chime is not None and len(parts) == 3
+                and parts[1] == "chime" and parts[2] == "set"):
+            log.info("Attention chime")
+            threading.Thread(target=self._play_chime, daemon=True).start()
+            return
         # avr-tv-bridge/campopup/toggle  (remote "0" button: show if hidden, else hide)
         if (self.camera_popup is not None and len(parts) == 3
                 and parts[1] == "campopup" and parts[2] == "toggle"):
@@ -582,6 +701,144 @@ class LauncherService:
         sequencing; we just request the scene."""
         self.client.publish(f"{BASE}/scene/media_center_off/set", "PRESS",
                             retain=False)
+
+    def _play_chime(self):
+        """Soft attention chime. If the amp is off, wake it; in every case make
+        sure it's on the PC input (otherwise there is no audio path and the
+        chime is silent), WAIT until it confirms it's fully on + a settle, then
+        play; leaves the amp on afterward. Runs in its own thread (the amp wake
+        can take a few seconds)."""
+        try:
+            # A ping must never trigger an idle power-off.
+            if self.idle_off is not None:
+                self.idle_off.defer(self._chime_idle_defer)
+            # Prefer the amp's LIVE state: the retained MQTT topic is only
+            # refreshed every POLL_INTERVAL (10s), so right after you power the
+            # system on by hand it still says OFF — which used to make the chime
+            # re-send power+input and then stall CHIME_AMP_SETTLE seconds.
+            live = self._amp_live_state()
+            power = live.get("power") or self._denon_power
+            cold = self._chime_amp_on and power != "ON"
+            # Route the PC's audio to the amp so the chime is actually heard:
+            # both when waking it, and when it's already on but sitting on
+            # another source (e.g. TV/CEC audio after a manual power-on).
+            want_input = ""
+            if self._chime_amp_on and self._chime_amp_input:
+                if cold or self._chime_input_sync:
+                    want_input = self._chime_amp_input
+            # One telnet read for both decisions (get_state is ~0.8s, and the
+            # chime should start promptly after the button press).
+            changed = self._route_amp_input(live.get("input"), want_input)
+            if cold:
+                # Mark this as a chime-wake so the OFF->ON transition it causes is
+                # NOT treated as a user power-on (which would start the short idle
+                # window and power everything off right after the ping).
+                self._chime_wake_until = time.monotonic() + 20
+                log.info("chime: amp %s — powering on (input %s), waiting to be ready",
+                         power or "unknown", want_input or "-")
+                self.client.publish(f"{BASE}/{self._denon_id}/power/set", "ON",
+                                    retain=False)
+                # Re-assert + verify the input once the amp is awake: an SI sent
+                # during standby is often dropped, so it could still be on its
+                # previous source when the first note plays.
+                self._wait_amp_ready(want_input)
+            elif want_input and changed is not False:
+                # Already on, but we just switched its input (or couldn't tell
+                # what it was): give the HDMI audio link a moment to relock, or
+                # the first notes play into dead air.
+                if self._confirm_amp_input(want_input):
+                    time.sleep(min(self._chime_amp_settle, 1.5))
+            self.chime.play(extra=self._chime_cold_extra if cold else 0)
+        except Exception as e:
+            log.exception("chime failed: %s", e)
+
+    def _amp_live_state(self) -> dict:
+        """Amp state straight from telnet, bypassing the laggy retained MQTT
+        state. Returns {} when there is no direct client, and power/input come
+        back as None when the amp can't be reached (DenonClient.get_state()
+        reports unreachable amps as {"available": False})."""
+        if self._chime_denon is None:
+            return {}
+        try:
+            return self._chime_denon.get_state()
+        except Exception as e:
+            log.debug("chime: live amp state failed: %s", e)
+            return {}
+
+    def _route_amp_input(self, cur, want: str):
+        """Select `want` on the amp so the chime has an audio path.
+
+        `cur` is the input read in this pass (None = unknown). Returns True if we
+        changed it, False if it already was `want` (so the caller can play
+        straight away), or None if `cur` was unreadable (we still asked, but the
+        caller must verify)."""
+        if not want:
+            return False
+        if cur == want:
+            log.debug("chime: amp already on input %s", want)
+            return False
+        log.info("chime: amp input %s -> %s (so the chime is audible)",
+                 cur or "?", want)
+        if self._chime_denon is not None:
+            try:
+                self._chime_denon.set_input(want)
+            except Exception as e:
+                log.warning("chime: input set failed (%s); asking the bridge", e)
+                self.client.publish(f"{BASE}/{self._denon_id}/input/set", want,
+                                    retain=False)
+        else:
+            self.client.publish(f"{BASE}/{self._denon_id}/input/set", want,
+                                retain=False)
+        return True if cur is not None else None
+
+    def _confirm_amp_input(self, want: str, attempts: int = 4) -> bool:
+        """Check the amp really selected `want`; re-send + retry if not.
+
+        The AVR ignores SI commands sent while it is still booting, so a single
+        input set on a cold wake could leave it on its previous source and the
+        chime would play into a dead input."""
+        if not want or self._chime_denon is None:
+            return True     # nothing to verify (or no direct client)
+        for _ in range(attempts):
+            if self._amp_live_state().get("input") == want:
+                return True
+            try:
+                self._chime_denon.set_input(want)
+            except Exception as e:
+                log.debug("chime: input re-send failed: %s", e)
+                return False
+            time.sleep(0.5)
+        log.warning("chime: amp did not reach input %s (%d attempts)",
+                    want, attempts)
+        return False
+
+    def _wait_amp_ready(self, want_input: str = ""):
+        """Block until the amp confirms power=ON (polled over telnet so it isn't
+        gated on the laggy retained MQTT state), up to CHIME_AMP_WAIT; re-assert
+        the PC input now that it's awake, then a settle for the HDMI audio link
+        — so the chime isn't swallowed while the amp is still waking / switching
+        inputs."""
+        deadline = time.monotonic() + self._chime_amp_wait
+        confirmed = False
+        if self._chime_denon is not None:
+            while time.monotonic() < deadline:
+                if self._amp_live_state().get("power") == "ON":
+                    confirmed = True
+                    break
+                time.sleep(0.5)
+            if confirmed:
+                log.info("chime: amp confirmed ON")
+            else:
+                log.warning("chime: amp not confirmed ON in %.0fs; playing anyway",
+                            self._chime_amp_wait)
+        else:
+            time.sleep(self._chime_amp_wait)   # no telnet client; fixed wait
+        # Only worth verifying the input if the amp actually came up (it's ~0.8s
+        # per read, and pointless when the amp is unreachable).
+        if confirmed and want_input:
+            self._confirm_amp_input(want_input)
+        # Settle: let the Denon lock the HDMI audio input before the first note.
+        time.sleep(self._chime_amp_settle)
 
     def _parse_cam_trigger(self, raw: str):
         """Translate a trigger payload into a popup count (>0 open, 0 close).

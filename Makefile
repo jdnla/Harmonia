@@ -6,7 +6,8 @@
 #   make restart  Restart the running bridge service.
 #   make status   Show service status.
 #   make logs     Follow the service journal.
-#   make test     Syntax-check all Python modules + the install script.
+#   make test     Syntax-check all Python modules + the install script, then run
+#                 the unit tests in tests/ (stdlib unittest, no deps needed).
 #
 # `deploy` is safe to run repeatedly. It updates the deployed service in
 # /opt/avr-tv-bridge from whatever is committed on the current branch's remote.
@@ -17,7 +18,7 @@ VENV        := $(INSTALL_DIR)/venv
 PYTHON      := $(VENV)/bin/python
 PIP         := $(VENV)/bin/pip
 
-.PHONY: deploy install restart status logs test rebuild-venv _sync _deps
+.PHONY: deploy install restart status logs test unit rebuild-venv _sync _deps
 
 rebuild-venv: ## Recreate the venv (needed after an OS Python-version upgrade)
 	@echo "==> Rebuilding venv at $(VENV) (fixes ModuleNotFoundError after a"
@@ -65,10 +66,15 @@ status: ## Show service status
 logs: ## Follow the service log
 	journalctl -u $(SERVICE) -f
 
-test: ## Syntax-check Python + install.sh
+test: ## Syntax-check Python + install.sh, then run the unit tests
 	@ok=1; \
 	for f in src/*.py setup/*.py; do \
 		python3 -m py_compile "$$f" && echo "  OK   $$f" || { echo "  FAIL $$f"; ok=0; }; \
 	done; \
 	bash -n install.sh && echo "  OK   install.sh" || { echo "  FAIL install.sh"; ok=0; }; \
 	[ $$ok -eq 1 ] && echo "All checks passed" || { echo "Some checks failed"; exit 1; }
+	@$(MAKE) --no-print-directory unit
+
+unit: ## Run the unit tests (stdlib unittest; no runtime deps needed)
+	@echo "==> Unit tests"
+	@python3 -m unittest discover -s tests -t tests

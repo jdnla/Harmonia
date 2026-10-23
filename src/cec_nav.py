@@ -79,6 +79,7 @@ class CecNav:
         self._stop = False
         self._focus_class = ""
         self._focus_at = 0.0  # monotonic ms of last focus query
+        self._claimed_la = None   # playback logical address we last claimed
 
     def _focused_class(self) -> str:
         """Return the last-known focused-window class WITHOUT blocking.
@@ -160,6 +161,21 @@ class CecNav:
         except (OSError, subprocess.SubprocessError) as e:
             log.warning("inject %s failed: %s", key_args, e)
 
+    def _current_la(self) -> str | None:
+        """The adapter's current playback logical-address NUMBER as a string
+        (e.g. '8'), or None if unconfigured/unreadable. Read-only; safe to call
+        while the follower is monitoring."""
+        try:
+            r = subprocess.run(["cec-ctl", "-d", CEC_DEVICE],
+                               capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        for line in r.stdout.splitlines():
+            m = re.search(r"Logical Address\s*:\s*(\d+)", line)
+            if m:
+                return m.group(1)
+        return None
+
     def _ensure_adapter_configured(self) -> bool:
         """Ensure the CEC adapter has claimed a logical address.
 
@@ -167,16 +183,29 @@ class CecNav:
         with "missing logical address(es)" if the adapter is unconfigured. The
         adapter can lose its claim on any display/connector re-init even if
         cec-playback.service ran at boot, so we (re)claim the playback role here
-        before starting the follower. Idempotent and cheap.
+        before starting the follower.
+
+        CRITICAL: we `--clear` BEFORE claiming. A plain `--playback` while an old
+        claim is still lingering on the bus DRIFTS to a different playback
+        logical address (observed: Playback Device 2 / LA 8 -> Playback Device 3
+        / LA 11). The TV learned to forward remote D-pad to the ORIGINAL address,
+        so after a drift the TV keeps sending RC to LA 8, the PC is at LA 11, and
+        nav silently stops even though the follower is happily running. Clearing
+        first makes the claim deterministic — it lands back on Playback Device 2
+        (LA 8) every time (verified 3/3 vs. non-deterministic without the clear).
         """
         try:
+            subprocess.run(["cec-ctl", "-d", CEC_DEVICE, "--clear"],
+                           capture_output=True, text=True, timeout=10)
             r = subprocess.run(
                 ["cec-ctl", "-d", CEC_DEVICE, "--playback",
                  "--osd-name", os.environ.get("CEC_OSD_NAME", "LinuxPC")],
                 capture_output=True, text=True, timeout=10)
             ok = r.returncode == 0
             if ok:
-                log.info("CEC adapter configured (playback role claimed)")
+                self._claimed_la = self._current_la()
+                log.info("CEC adapter configured (playback role claimed, LA %s)",
+                         self._claimed_la or "?")
             else:
                 log.warning("cec-ctl --playback failed rc=%s: %s",
                             r.returncode, r.stderr.strip())
@@ -184,6 +213,35 @@ class CecNav:
         except (OSError, subprocess.SubprocessError) as e:
             log.warning("could not configure CEC adapter: %s", e)
             return False
+
+    def _la_watchdog(self):
+        """Catch a SILENT logical-address drift while the follower keeps running.
+
+        Some display/power re-inits re-negotiate the adapter to a different
+        playback LA without the follower exiting — so it runs on, but the TV
+        sends D-pad to the address we no longer hold and nav dies with no error.
+        Periodically compare the live LA to the one we claimed; if it moved (or
+        was lost), terminate the follower so run() re-claims (clear+claim) and
+        restarts it on the stable address."""
+        interval = float(os.environ.get("CEC_LA_WATCHDOG_SECS", "20"))
+        while not self._stop:
+            if self._stop_wait(interval):
+                return
+            proc = self._proc
+            if proc is None or proc.poll() is not None:
+                continue                       # between runs; run() handles it
+            expected = self._claimed_la
+            if not expected:
+                continue
+            cur = self._current_la()
+            if cur is not None and cur != expected:
+                log.warning("CEC logical address drifted %s -> %s; re-claiming "
+                            "(remote D-pad passthrough breaks otherwise)",
+                            expected, cur)
+                try:
+                    proc.terminate()           # run() re-claims + restarts
+                except Exception:
+                    pass
 
     def _run_follower_once(self) -> bool:
         """Configure the adapter, run cec-follower, and pump its output until it
@@ -213,6 +271,9 @@ class CecNav:
         if NAV_PROFILES_ENABLED:
             t = threading.Thread(target=self._focus_poller, daemon=True)
             t.start()
+        # Watch for a silent CEC logical-address drift that would otherwise leave
+        # the follower running but deaf to the TV's remote passthrough.
+        threading.Thread(target=self._la_watchdog, daemon=True).start()
         # Retry IN-PROCESS rather than exiting for a systemd restart. On
         # power-on / display-wake the CEC adapter loses its logical-address
         # claim during display re-init, and cec-follower exits immediately until
