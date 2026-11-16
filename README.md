@@ -109,21 +109,37 @@ Everything appears under a single **"Media Center"** device in Home Assistant:
 - **Display wake** — wakes the PC's screen (DPMS) when the AV gear powers on.
 - **Power-sync** — keeps the receiver in step with the TV (fixes CEC turning on
   one device but not the other).
+- **IR remote (receive / send / learn)** — via the USB-UIRT + LIRC. Received
+  presses become an HA `event` entity (automation triggers) + a "Last IR Code"
+  sensor; known codes get tap-to-send buttons plus a generic "Remote/KEY" send
+  box; and new codes can be **learned** on the fly (point a remote at the
+  receiver, capture, replay). Lives under a nested "IR Blaster" device. Full
+  details in [`docs/IR.md`](docs/IR.md).
 
-## Two components, two services
+## Components & services
 
 The system splits along a privilege boundary:
 
-1. **AV/TV bridge** (`src/bridge.py`) — a **system** service. Talks to the
-   receiver, the TV, and the MQTT broker over the network. No GUI access needed.
+1. **AV/TV bridge** (`src/bridge.py`) — a **system** service (runs as your user).
+   Talks to the receiver, the TV, and the MQTT broker over the network. No GUI
+   access needed.
 
 2. **App launcher / media / camera** (`src/launcher_service.py`) — a **user**
    service running inside the KDE session (it needs the graphical environment to
    open/focus windows). Handles app launching, D-pad injection, media transport,
-   the camera popup, and display wake.
+   the camera popup, and display wake. Alongside it run `avr-tv-bridge-cecnav`
+   (CEC D-pad) and `ydotoold` (key injection), also user services.
 
-Both publish their entities under the same HA device, so it looks like one
-device even though two processes do the work.
+3. **IR bridge** (`src/ir_bridge.py`) — a **system** service that runs as
+   **root** (the only one that does). Exposes the USB-UIRT IR transceiver to HA
+   for receiving remote presses, sending/blasting IR, and learning new codes. It
+   runs as root because *learning* must stop/start `lircd`, open the serial
+   device, and write `/etc/lirc` configs; receive/send alone are unprivileged.
+   See [`docs/IR.md`](docs/IR.md). Optional — installed only if LIRC is present.
+
+All publish their entities over MQTT discovery, so the whole thing shows up in HA
+as one **"Media Center"** device (with IR under a nested "IR Blaster" sub-device)
+even though separate processes do the work.
 
 ## Input paths (how the remote reaches the PC)
 
@@ -179,7 +195,7 @@ Then configure:
    ```
 3. Start / check:
    ```bash
-   sudo systemctl start avr-tv-bridge
+   sudo systemctl start avr-tv-bridge avr-tv-bridge-ir   # -ir only if LIRC present
    systemctl --user status avr-tv-bridge-launcher avr-tv-bridge-cecnav ydotoold irexec
    ```
 
@@ -219,8 +235,11 @@ All settings live in `config.env` (see `config.env.example` for the full list):
 HACS `button-card` and `card-mod`). Home Assistant derives entity_ids from the
 device/entity names, so IDs look like `switch.media_center_master_power`,
 `button.media_center_launch_plex`, `sensor.media_center_now_playing`, etc. — the
-exact prefix depends on your device name at first discovery. Check
-Settings → Entities and adjust the card entity_ids to match yours.
+exact prefix depends on your device name at first discovery, and HA's slugs are
+**inconsistent** across discovery batches. Check Settings → Entities and adjust
+the card entity_ids to match yours.
+
+The example install also has a hand-built **`media-remote`** dashboard (one view). Editing HA dashboards goes through HA's authenticated websocket API; use a short-lived token and never store it in the repository.
 
 ## Deploy changes
 
@@ -239,16 +258,18 @@ For the user-session services, re-run `install-launcher.sh` (or copy `src/` into
 ```
 src/
   bridge.py denon.py vizio.py discovery.py     AV/TV bridge (system service)
+  ir_bridge.py                                 IR receive/send/learn (root service)
   launcher.py launcher_service.py session_env.py launch_app.sh
   navkey.py navkey.sh                          IR D-pad key injection (fallback)
   cec_nav.py                                   CEC D-pad navigation (primary)
   media_control.py                             play/pause/next/prev + status
   camera_popup.py                              motion-triggered camera overlay
   display_wake.py                              DPMS wake
+tests/    test_ir_bridge.py, test_chime.py, …  stdlib unittest
 setup/    pair_vizio.py, build_ydotool.sh
-systemd/  bridge, cec-playback, launcher, cecnav, ydotoold units
+systemd/  bridge, ir, cec-playback, launcher, cecnav, ydotoold units
 lirc/     IR device driver options, remote config, irexec.lircrc
-install.sh              system bridge + CEC + IR
+install.sh              system bridge + CEC + IR (+ root IR bridge, §6b)
 install-launcher.sh     user launcher + CEC nav + ydotool + media + camera
 config.env.example      all settings, documented
 homeassistant-dashboard.yaml

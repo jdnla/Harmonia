@@ -157,6 +157,8 @@ if [[ $DO_IR -eq 1 ]]; then
   install -m 644 "$REPO_DIR/lirc/lirc_options.conf" /etc/lirc/lirc_options.conf
   install -m 644 "$REPO_DIR/lirc/vizio.lircd.conf" \
     /etc/lirc/lircd.conf.d/vizio.lircd.conf
+  install -m 644 "$REPO_DIR/lirc/s3box.lircd.conf" \
+    /etc/lirc/lircd.conf.d/s3box.lircd.conf
   # Remove the distro's default remote stub so it doesn't shadow ours.
   [[ -f /etc/lirc/lircd.conf.d/devinput.lircd.conf ]] && \
     mv /etc/lirc/lircd.conf.d/devinput.lircd.conf \
@@ -176,6 +178,24 @@ if ! grep -q '^User=' /etc/systemd/system/avr-tv-bridge.service; then
 fi
 systemctl daemon-reload
 systemctl enable avr-tv-bridge.service
+
+# ---- 6b. IR bridge service (root) -----------------------------------------
+# Exposes the USB-UIRT IR transceiver to Home Assistant (receive/send/learn).
+# Runs as root (not $RUN_USER): learning stops/starts lircd, opens the serial
+# device, and writes /etc/lirc configs. Only installed if LIRC is present.
+if command -v irsend >/dev/null 2>&1; then
+  log "Installing IR bridge systemd service (running as root)"
+  install -d -m 755 /var/lib/avr-tv-bridge-ir
+  sed -e "s|^EnvironmentFile=.*|EnvironmentFile=$CONFIG_DIR/config.env|" \
+      -e "s|^Environment=IREXEC_USER=.*|Environment=IREXEC_USER=$RUN_USER|" \
+      -e "s|^Environment=IREXEC_UID=.*|Environment=IREXEC_UID=$(id -u "$RUN_USER")|" \
+      "$REPO_DIR/systemd/avr-tv-bridge-ir.service" \
+      > /etc/systemd/system/avr-tv-bridge-ir.service
+  systemctl daemon-reload
+  systemctl enable avr-tv-bridge-ir.service
+else
+  log "LIRC (irsend) not found — skipping IR bridge service"
+fi
 
 cat <<EOF
 
