@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install.sh — provision a host to bridge a Denon AVR + Vizio SmartCast TV
+# install.sh — provision a Linux host to bridge an AV receiver and/or display
 # to Home Assistant over MQTT, and set up HDMI-CEC and USB-UIRT IR control.
 #
 # Idempotent: safe to re-run. It installs packages, lays down systemd services,
@@ -205,7 +205,7 @@ Finish setup with the guided wizard (run as $RUN_USER, NOT root):
   harmonia setup
 
 It discovers your receiver/TV on the network, auto-detects the speaker layout,
-pairs the TV, and writes your config. Then:
+pairs devices that support pairing, and writes your config. Then:
 
   harmonia doctor            # verify everything is healthy
   harmonia start             # start the bridge
@@ -214,6 +214,6 @@ pairs the TV, and writes your config. Then:
 Other commands:  harmonia status | list | driver new <role> <name> | help
 
 (Prefer to configure by hand? Edit $CONFIG_DIR/config.env, run
- 'harmonia pair <TV_IP>', then 'harmonia start'.) Devices appear automatically
-in Home Assistant via MQTT discovery.
+ 'harmonia pair [host] [--driver <name>] [--save]', then 'harmonia start'.)
+Devices appear automatically in Home Assistant via MQTT discovery.
 EOF

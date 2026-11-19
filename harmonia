@@ -9,7 +9,12 @@
 #   harmonia doctor                # read-only health check
 #   harmonia list                  # list registered device drivers
 #   harmonia driver new <role> <n> # scaffold a new driver plugin
-#   harmonia pair <tv_ip>          # pair a Vizio SmartCast TV
+#   harmonia pair [host] [--driver D] # pair the configured display/receiver
+#   harmonia device list           # configured + registered device drivers
+#   harmonia device state [--role receiver]  # normalized device state
+#   harmonia device profile [--driver vizio] # read display diagnostics
+#   harmonia device inputs [--driver vizio]  # list display inputs/visibility
+#   harmonia device key [--driver vizio] "MENU 1 9 9 9"
 #   harmonia hotkeys               # (re)register Meta+F11/F12 power on/off keys
 #   harmonia start|stop|restart [target]   # all services, or one:
 #                                  #   bridge (system) | launcher | cecnav (user)
@@ -33,7 +38,11 @@ USER_SVCS=(avr-tv-bridge-launcher.service avr-tv-bridge-cecnav.service)
 # Fall back to a repo checkout if not installed to /opt (dev use).
 if [[ ! -x "$VENV_PY" ]]; then
   SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  REPO_DIR="$(dirname "$SELF_DIR")"
+  if [[ -d "$SELF_DIR/setup" ]]; then
+    REPO_DIR="$SELF_DIR"
+  else
+    REPO_DIR="$(dirname "$SELF_DIR")"
+  fi
   SETUP_DIR="$REPO_DIR/setup"
   VENV_PY="$(command -v python3)"
 fi
@@ -103,8 +112,9 @@ case "$cmd" in
   driver)
     py harmonia_driver.py "$@" ;;
   pair)
-    [[ $# -ge 1 ]] || { echo "usage: harmonia pair <tv_ip>" >&2; exit 2; }
-    py pair_vizio.py "$@" ;;
+    py device_tools.py pair "$@" ;;
+  device)
+    py device_tools.py "$@" ;;
   hotkeys)
     warn_root hotkeys
     bash "$SETUP_DIR/register_hotkeys.sh" "$@" ;;

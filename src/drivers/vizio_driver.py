@@ -7,7 +7,7 @@ can add volume+mute via VIZIO_CAPS.
 """
 from __future__ import annotations
 
-from vizio import VizioClient
+from vizio import VizioClient, pair as vizio_pair
 from .base import (Display, DiscoveredDevice,
                    CAP_POWER, CAP_VOLUME, CAP_MUTE, CAP_INPUT)
 from .registry import register_display
@@ -18,6 +18,10 @@ class VizioDisplay(Display):
     role_id = "display"
 
     DEFAULT_INPUTS = "HDMI-1,HDMI-2,HDMI-3,HDMI-4,COMP,TUNER,CAST,SMARTCAST"
+    input_name_writes_safe = False
+    input_name_hint = (
+        "Vizio SmartCast firmware may reject or hang on input-name writes; "
+        "rename the input in the TV UI, then set SCENE_TV_INPUT_MATCH.")
 
     def __init__(self, client: VizioClient, inputs: list[str],
                  capabilities: tuple[str, ...], name: str, model: str, label: str):
@@ -28,6 +32,15 @@ class VizioDisplay(Display):
         self.model = model
         self.label = label
         self.manufacturer = "Vizio"
+
+    @classmethod
+    def pair(cls, env, host=None, token_file=None):
+        """One-time SmartCast PIN pairing; returns config.env updates."""
+        host = host or env("VIZIO_HOST", required=True)
+        token_file = token_file or env(
+            "VIZIO_TOKEN_FILE", "~/.config/avr-tv-bridge/vizio.token")
+        path = vizio_pair(host, token_file)
+        return {"VIZIO_HOST": host, "VIZIO_TOKEN_FILE": path}
 
     @classmethod
     def from_env(cls, env):
@@ -104,6 +117,33 @@ class VizioDisplay(Display):
         a hardcoded HDMI port. Returns [] if the TV is unreachable.
         """
         return self._c.list_named_inputs()
+
+    def get_profile(self) -> dict:
+        """Read-only TV diagnostics (firmware, audio, ads, input visibility)."""
+        return self._c.get_tv_profile()
+
+    def get_tv_profile(self) -> dict:
+        """Backward-compatible alias used by the bridge poller."""
+        return self.get_profile()
+
+    def get_input_visibility(self) -> dict[str, str]:
+        return self._c.get_input_visibility()
+
+    @staticmethod
+    def input_cname(hardware_name: str) -> str:
+        return VizioClient.input_cname(hardware_name)
+
+    def get_inputs(self) -> list[dict]:
+        return self._c.get_inputs()
+
+    def set_input_name(self, hardware_name: str, name: str) -> bool:
+        return self._c.set_input_name(hardware_name, name)
+
+    def set_input_visibility(self, hardware_name: str, visible: bool) -> bool:
+        return self._c.set_input_visibility(hardware_name, visible)
+
+    def send_key_sequence(self, spec: str) -> bool:
+        return self._c.send_key_sequence(spec)
 
     def set_volume(self, vol: float) -> None:
         self._c.set_volume(int(vol))

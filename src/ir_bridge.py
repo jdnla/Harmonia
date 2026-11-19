@@ -552,14 +552,11 @@ class IrBridge:
             self._learn_lock.release()
 
     def _kick_irexec(self):
-        """Best-effort: bounce the desktop user's irexec service so the physical
+        """Best-effort: bounce jdnla's user irexec service so the physical
         remote reconnects to the freshly-restarted lircd (irexec is Restart=
         on-failure and may not auto-reconnect on a clean EOF)."""
-        uid = env("IREXEC_UID", "")
-        user = env("IREXEC_USER", "")
-        if not user or not uid:
-            log.warning("IREXEC_USER/IREXEC_UID not set; skipping irexec bounce")
-            return
+        uid = env("IREXEC_UID", "1000")
+        user = env("IREXEC_USER", "jdnla")
         sh(["su", "-", user, "-c",
             f"XDG_RUNTIME_DIR=/run/user/{uid} systemctl --user restart irexec.service"],
            timeout=10)

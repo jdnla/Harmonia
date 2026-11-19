@@ -225,17 +225,44 @@ def step_write(all_env):
 
 
 def step_pair(chosen):
-    disp = chosen.get("display")
-    if not disp or disp.followup != "pair":
-        return
-    hc.head("7. Pair the TV")
-    hc.info("Vizio SmartCast needs a one-time PIN pairing.")
-    if not hc.confirm(f"Pair with {disp.host} now?", default=True):
-        hc.info("You can pair later: "
-                "python3 setup/pair_vizio.py " + disp.host)
-        return
-    pair_script = os.path.join(HERE, "pair_vizio.py")
-    os.system(f'{sys.executable} "{pair_script}" {disp.host}')
+    from drivers.registry import get_display, get_receiver
+
+    for role in ("receiver", "display"):
+        dev = chosen.get(role)
+        if not dev or dev.followup != "pair":
+            continue
+        hc.head(f"7. Pair the {role}")
+        try:
+            getter = get_receiver if role == "receiver" else get_display
+            cls = getter(dev.driver_name)
+        except Exception as e:
+            hc.warn(f"could not load {role} driver {dev.driver_name!r}: {e}")
+            continue
+        if cls is None or not callable(getattr(cls, "pair", None)):
+            hc.info(f"{role} driver {dev.driver_name!r} has no pairing step.")
+            continue
+        from drivers.base import Device
+        if getattr(cls.pair, "__func__", None) is Device.pair:
+            hc.info(f"{role} driver {dev.driver_name!r} has no pairing step.")
+            continue
+        if not hc.confirm(f"Pair {dev.label} at {dev.host} now?", default=True):
+            hc.info("You can pair later: "
+                    f"harmonia pair --role {role} --driver {dev.driver_name} "
+                    f"{dev.host}")
+            continue
+
+        env = hc.read_env_file()
+
+        def envget(key, default=None, required=False):
+            return env.get(key, default)
+
+        try:
+            updates = cls.pair(envget, host=dev.host) or {}
+            if updates:
+                hc.merge_env(updates)
+            hc.ok(f"{role} [{dev.driver_name}] paired")
+        except Exception as e:
+            hc.bad(f"pairing failed: {e}")
 
 
 def main():

@@ -135,8 +135,9 @@ def check_devices(env):
             hc.ok(f"{role} [{drv_name}]: {detail}")
         else:
             hc.bad(f"{role} [{drv_name}]: {detail}")
-            hc.info("fix: check the device IP/power and config.env; for Vizio "
-                    "re-pair with setup/pair_vizio.py")
+            hc.info("fix: check the device IP/power and config.env; if this "
+                    f"driver supports pairing, run: harmonia pair --role {role} "
+                    f"--driver {drv_name}")
             fail()
 
 

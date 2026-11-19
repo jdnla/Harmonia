@@ -37,6 +37,8 @@ deploy: ## Pull latest and update the running service
 	git pull --ff-only
 	@$(MAKE) --no-print-directory _sync
 	@$(MAKE) --no-print-directory _deps
+	@echo "==> Installing harmonia wrapper"
+	sudo install -m 755 setup/harmonia /usr/local/bin/harmonia
 	@echo "==> Restarting $(SERVICE)"
 	sudo systemctl restart $(SERVICE)
 	@sleep 2
@@ -45,10 +47,12 @@ deploy: ## Pull latest and update the running service
 		|| { echo "!! $(SERVICE) is not active — check: journalctl -u $(SERVICE) -n 30"; exit 1; }
 
 _sync: ## Copy source into the installed location
-	@echo "==> Syncing src/ into $(INSTALL_DIR)"
+	@echo "==> Syncing src/ and setup/ into $(INSTALL_DIR)"
 	@# The install dir is owned by the running user, so no sudo needed here.
-	mkdir -p $(INSTALL_DIR)/src
+	mkdir -p $(INSTALL_DIR)/src/drivers $(INSTALL_DIR)/setup
 	cp -f src/*.py $(INSTALL_DIR)/src/
+	cp -f src/drivers/*.py $(INSTALL_DIR)/src/drivers/
+	cp -f setup/*.py $(INSTALL_DIR)/setup/
 
 _deps: ## Update venv deps if requirements.txt changed
 	@echo "==> Ensuring Python deps are current"

@@ -95,6 +95,10 @@ class Bridge:
         self.scene_poll_interval = float(env("SCENE_POLL_INTERVAL", "1.0"))
         self.scene_input_settle = float(env("SCENE_INPUT_SETTLE", "1.5"))
 
+        # Read-only SmartCast diagnostics (firmware/audio/ads/input visibility).
+        self.tv_profile_interval = float(env("VIZIO_PROFILE_INTERVAL", "60"))
+        self._next_tv_profile = 0.0
+
         # Power-sync watchdog: keep the receiver's power in sync with the display
         # (display is source of truth). Only meaningful when BOTH roles exist.
         self.sync_power = env("SYNC_POWER", "1") not in ("0", "false", "False", "")
@@ -210,7 +214,12 @@ class Bridge:
             self._resolve_display_input()
         except Exception as e:
             log.debug("initial TV input detection skipped: %s", e)
+        try:
+            self._poll_tv_profile(force=True)
+        except Exception as e:
+            log.debug("initial TV profile read skipped: %s", e)
         client.subscribe(f"{BASE}/+/+/set")
+        client.subscribe(f"{BASE}/+/key/+/set")
         client.subscribe(f"{BASE}/scene/+/set")
         threading.Thread(target=self._poll_once, daemon=True).start()
 
@@ -243,6 +252,14 @@ class Bridge:
         aa_id = self.audio_authority.mqtt_id if self.audio_authority else None
         entities += disc.build_hub_entities(
             vol_max=vol_max, vol_step=vol_step, audio_authority=aa_id)
+        # SmartCast-only diagnostics and key controls.
+        if self.display is not None:
+            if hasattr(self.display.driver, "get_tv_profile"):
+                entities += disc.build_tv_diagnostics(
+                    self.display.mqtt_id, label_prefix=self.display.label)
+            if hasattr(self.display.driver, "send_key_sequence"):
+                entities += disc.build_tv_controls(
+                    self.display.mqtt_id, label_prefix=self.display.label)
         for topic, payload in entities:
             self.client.publish(topic, disc.dumps(payload), retain=True)
         log.info("Published discovery for %d entities (incl. hub)", len(entities))
@@ -264,6 +281,12 @@ class Bridge:
                         self._scene_media_center_on()
                     else:
                         self._scene_media_center_off()
+                return
+            if len(parts) >= 5 and parts[2] == "key":
+                self._handle_tv_key(parts[1], parts[3])
+                return
+            if len(parts) >= 4 and parts[2] == "key_sequence":
+                self._handle_tv_key_sequence(parts[1], payload)
                 return
             # avr-tv-bridge/<dev>/<entity>/set
             _, dev, entity, _ = parts
@@ -292,6 +315,75 @@ class Bridge:
             target.set_volume(vol)
         time.sleep(0.4)
         self._poll_once()
+
+    def _tv_display(self, dev: str):
+        """Return the display managed device if it matches and supports keys."""
+        disp = self.display
+        if disp is None or disp.mqtt_id != dev:
+            return None
+        if not hasattr(disp.driver, "send_key_sequence"):
+            return None
+        return disp
+
+    def _handle_tv_key(self, dev: str, key: str):
+        disp = self._tv_display(dev)
+        if disp is None:
+            return
+        sequence = key.strip().upper()
+        if not sequence:
+            return
+        ok = disp.driver.send_key_sequence(sequence)
+        self._pub(f"{disc.state_base(dev)}/key_sequence/state", sequence)
+        log.info("TV key %s -> %s", sequence, "sent" if ok else "failed")
+
+    def _handle_tv_key_sequence(self, dev: str, payload: str):
+        disp = self._tv_display(dev)
+        if disp is None:
+            return
+        sequence = " ".join(payload.replace(",", " ").split())
+        if not sequence:
+            return
+        ok = disp.driver.send_key_sequence(sequence)
+        self._pub(f"{disc.state_base(dev)}/key_sequence/state", sequence)
+        log.info("TV key sequence %r -> %s", sequence,
+                 "sent" if ok else "failed")
+
+    def _poll_tv_profile(self, force: bool = False):
+        """Publish read-only TV diagnostics at a slower cadence than polling."""
+        disp = self.display
+        if disp is None or not hasattr(disp.driver, "get_tv_profile"):
+            return
+        if self.tv_profile_interval <= 0:
+            return
+        now = time.monotonic()
+        if not force and now < self._next_tv_profile:
+            return
+        self._next_tv_profile = now + max(5.0, self.tv_profile_interval)
+        try:
+            profile = disp.driver.get_tv_profile()
+        except Exception as e:
+            log.debug("TV profile read failed: %s", e)
+            return
+        if not profile or not profile.get("available"):
+            return
+        sb = disc.state_base(disp.mqtt_id)
+        self._pub(f"{sb}/tv/firmware/state", profile.get("firmware") or "unknown")
+        self._pub(f"{sb}/tv/speakers/state", profile.get("tv_speakers") or "unknown")
+        self._pub(f"{sb}/tv/earc/state", profile.get("earc") or "unknown")
+        self._pub(f"{sb}/tv/ad_tracking/state",
+                  profile.get("limit_ad_tracking") or "unknown")
+        self._pub(f"{sb}/tv/ad_replacement/state",
+                  profile.get("ad_replacement") or "unknown")
+        inputs = profile.get("inputs") or []
+        visible = profile.get("visible_inputs") or []
+        self._pub(f"{sb}/tv/inputs/state",
+                  f"{len(visible)} visible / {len(inputs)} total")
+        self._pub(f"{sb}/tv/inputs/attributes", json.dumps({
+            "visible": visible,
+            "inputs": inputs,
+            "visibility": profile.get("input_visibility") or {},
+        }, sort_keys=True))
+
 
     def _resolve_display_input(self, publish: bool = True) -> str:
         """Return the TV input the media-center scene should select.
@@ -340,6 +432,10 @@ class Bridge:
                 elif len(matches) > 1:
                     log.info("scene: TV input ambiguous %s; using configured %s",
                              matches, configured)
+                else:
+                    log.info("scene: no CEC-named TV input matched %s; using "
+                             "fallback %s (rename the input or set "
+                             "SCENE_TV_INPUT_MATCH)", hints, configured)
         if resolved != self._resolved_tv_input:
             self._resolved_tv_input = resolved
         if publish:
@@ -487,6 +583,8 @@ class Bridge:
         # Power-sync only when both roles exist.
         if recv is not None and disp is not None:
             self._power_sync_check(r, v)
+
+        self._poll_tv_profile()
 
     def _power_sync_check(self, recv_state: dict, disp_state: dict):
         """Keep the receiver's power in sync with the display (display = truth)."""

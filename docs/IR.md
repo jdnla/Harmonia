@@ -13,17 +13,22 @@ re-deriving everything.
 
 ## Hardware & stack
 
-- **Transceiver:** a **USB-UIRT** (FTDI-based IR receiver + blaster) on the media
-  PC, at `/dev/serial/by-id/usb-FTDI_USB-UIRT-if00-port0`.
+- **Transceiver:** an IR receiver/blaster supported by LIRC. The reference setup
+  uses a **USB-UIRT** (FTDI-based) on the Harmonia host, at
+  `/dev/serial/by-id/usb-FTDI_USB-UIRT-if00-port0`; adjust the device path for
+  other hardware.
 - **Driver:** **LIRC** (`lircd`) with the `usb_uirt_raw` driver. `lircd.service`
   runs continuously and is **socket-activated** via `lircd.socket`; its control
   socket is `/var/run/lirc/lircd` (mode `srw-rw-rw-`, i.e. world read/write).
-- **Existing consumers:** `irexec.service` (a **user** service for `jdnla`,
-  `Restart=on-failure`) reads the socket and runs `~/buttonpress.py` to drive the
-  app launcher from the remote's number buttons. The IR bridge reads the **same
-  socket** independently — LIRC allows multiple socket readers, so the bridge and
-  irexec coexist without conflict.
-- **Loaded remote(s):** at time of writing, **`Vizio-TV`** (learned NEC remote, address `0x20DF`, 17 buttons: D-pad + OK + Back + Menu + digits 0–9), defined in `/etc/lirc/lircd.conf.d/vizio.lircd.conf`, and **`S3BOX`** (dedicated NEC remote, address `0x7C63`, D-pad/OK/Back/Menu/play-pause/volume/mute/power/home), defined in `/etc/lirc/lircd.conf.d/s3box.lircd.conf` and used for the ESP32-S3-BOX-3 link. List what lircd knows with `irsend LIST "" ""` and per-remote keys with `irsend LIST <remote> ""`.
+- **Existing consumers:** `irexec.service` (a **user** service for the desktop
+  user, `Restart=on-failure`) reads the socket and runs `~/buttonpress.py` to
+  drive the app launcher from the remote's number buttons. The IR bridge reads
+  the **same socket** independently — LIRC allows multiple socket readers, so
+  the bridge and irexec coexist without conflict.
+- **Loaded remote(s):** whatever LIRC remotes you install. This repo includes
+  example profiles for a TV remote and, optionally, an ESP32-S3-BOX-3
+  (`lirc/s3box.lircd.conf`). List what lircd knows with
+  `irsend LIST "" ""` and per-remote keys with `irsend LIST <remote> ""`.
 
 ## The service: `avr-tv-bridge-ir.service` (runs as **root**)
 
@@ -31,7 +36,7 @@ Unit template: `systemd/avr-tv-bridge-ir.service`; installed by `install.sh`
 section **6b** (skipped if `irsend` isn't present). `ExecStart` runs
 `/opt/avr-tv-bridge/venv/bin/python /opt/avr-tv-bridge/src/ir_bridge.py`.
 
-**Why root (unlike every other service here, which run as `jdnla`).** Receiving
+**Why root (unlike every other service here, which run as the desktop user).** Receiving
 and sending alone would work unprivileged — the lircd socket is world-rw, so
 `irsend` and socket reads need no privilege. But **learning** must:
   1. `systemctl stop lircd.socket lircd.service` to free the serial port,
@@ -63,16 +68,16 @@ nested below the main **Media Center** device via `via_device`. Published
 (retained) on connect and re-published after every successful learn.
 
 - **`event` "IR Received"** — `event_types` = every key lircd knows. Use it as an
-  automation trigger ("when `KEY_1` on `Vizio-TV` → …"). This is the primary
+  automation trigger ("when `KEY_1` on `<remote>` → …"). This is the primary
   "read IR in HA" surface.
 - **`sensor` "Last IR Code"** (diagnostic) — last `remote/KEY` seen, with attrs.
 - **`sensor` "IR Learn Status"** (diagnostic) — progress/result of a learn.
-- **`text` "IR Send (Remote/KEY)"** — type `Vizio-TV/KEY_MENU` (or
+- **`text` "IR Send (Remote/KEY)"** — type `<remote>/KEY_MENU` (or
   `… x3`) to fire a command directly. Publishes to `…/send/set`.
-- **`text` "IR Learn (Remote/KEY)"** — type `Denon/KEY_POWER`, submit, then press
-  the physical remote at the receiver. Publishes to `…/learn/set`.
+- **`text` "IR Learn (Remote/KEY)"** — type `<remote>/KEY_POWER`, submit, then
+  press the physical remote at the receiver. Publishes to `…/learn/set`.
 - **`button` per known key** (gated by `IR_EXPOSE_KEY_BUTTONS=1`) — one
-  tap-to-send button each, e.g. `IR Vizio-TV KEY_OK`, payload `Remote/KEY`.
+  tap-to-send button each, e.g. `IR <remote> KEY_OK`, payload `Remote/KEY`.
 
 > HA slugifies entity_ids from names and they are **not** always predictable
 > (look them up in the HA entity registry). Always verify actual entity_ids in
@@ -85,7 +90,7 @@ protocol `"<code> <repeat> <symbol> <remote>"`. The first frame (`repeat == 0`)
 publishes an `event`; holds update only the `last` readout. It reconnects on
 lircd restart and is *pausable* (so a learn can stop lircd without the receiver
 thrashing). Note lircd only emits a symbol for a **properly decoded** remote
-(e.g. the NEC Vizio one) — learned RAW remotes (below) are send-only.
+(e.g. a protocol LIRC can decode) — learned RAW remotes (below) are send-only.
 
 **Send.** `avr-tv-bridge/ir/send/set` → `irsend SEND_ONCE <remote> <key>` (the
 key is repeated N times in one call for `repeats`). `IR_SEND_REPEAT_CAP` clamps
@@ -150,7 +155,7 @@ journalctl -u avr-tv-bridge-ir.service -f          # watch receive/send/learn
 
 # Send a command by hand (needs MQTT creds from config.env):
 mosquitto_pub -h <MQTT_HOST> -u <MQTT_USER> -P <MQTT_PASS> \
-  -t avr-tv-bridge/ir/send/set -m 'Vizio-TV/KEY_OK'
+  -t avr-tv-bridge/ir/send/set -m '<remote>/KEY_OK'
 
 # See the retained HA discovery configs:
 mosquitto_sub -h <MQTT_HOST> -u <MQTT_USER> -P <MQTT_PASS> \
@@ -160,7 +165,7 @@ mosquitto_sub -h <MQTT_HOST> -u <MQTT_USER> -P <MQTT_PASS> \
 ### Troubleshooting
 
 - **Nothing on receive:** lircd only emits for a decoded remote. Confirm with
-  `irw` (press a button — you should see `… KEY_x Vizio-TV`). If `irw` is
+  `irw` (press a button — you should see `… KEY_x <remote>`). If `irw` is
   silent, it's a LIRC/hardware issue, not the bridge.
 - **Send does nothing physically but logs `rc=0`:** `irsend` reached lircd fine;
   the blaster just isn't aimed at / in range of the target device, or the target
@@ -178,81 +183,12 @@ mosquitto_sub -h <MQTT_HOST> -u <MQTT_USER> -P <MQTT_PASS> \
   `systemctl --user -M <user>@ restart irexec.service`, or just restart lircd +
   irexec.
 
-## S3BOX / ESP32-S3-BOX-3 IR link
+## Optional remote profiles
 
-The ESP32-S3-BOX-3 (Home Assistant voice satellite in the room) has an IR
-receiver on GPIO38 and an IR transmitter on GPIO39. It is physically pointed at
-the USB-UIRT, so the two can exchange NEC codes:
-
-- **BOX-3 → Harmonia (not verified):** call
-  `esphome.esp32_s3_box_3_send_ir` with `address: 0x7C63` (31843 decimal),
-  `command: <S3BOX key code>`, and `repeats: 1+`. The BOX-3 self-receives its
-  own transmission, but the USB-UIRT has not decoded one at the current
-  distance; the SENSOR-dock emitter is too weak. The LIRC receive-side bit
-  order also still needs testing before relying on `S3BOX/<KEY>` events from
-  this direction.
-- **Harmonia → BOX-3:** send `S3BOX/<KEY>` to `avr-tv-bridge/ir/send/set`
-  (or press an S3BOX button in HA). The BOX-3's NEC decoder sees LIRC/USB-UIRT
-  transmissions **bit-reversed**, so its `on_nec` handler matches address
-  `0xC63E` (reversed `0x7C63`) and the reversed key code, then fires an
-  `esphome.ir_received` HA event with `remote: S3BOX` and the key name. For
-  example, S3BOX `KEY_OK` (`0x0005`) arrives at the BOX-3 as `0xA000`.
-
-The unique address keeps BOX-3 traffic from also driving the Vizio TV. The S3BOX
-key map is in `lirc/s3box.lircd.conf`; install it with `install.sh` (or copy it
-to `/etc/lirc/lircd.conf.d/`) and restart `lircd` plus the IR bridge. The BOX-3
-side is in `esp32-s3-box-3.yaml`; the send service and the receive event are
-independent of this repo's deployment.
-
-The example is **one-way, Harmonia → BOX-3**,.
-BOX-3 → Harmonia is not implemented because the SENSOR-dock emitter is too weak at the
-current physical spacing; the send service remains available for testing.
-
-**BOX-3 power and bit order.** The SENSOR dock's IR receiver/emitter are dead
-until GPIO44 is driven (the `enable_ir` switch, inverted, default on); the
-ESPHome config must include it. The BOX-3's NEC decoder sees the USB-UIRT/LIRC
-transmissions bit-reversed: Vizio `0x20DF/0x58A7` arrives as `0xFB04/0xE51A`,
-and `0x52AD` arrives as `0xB54A`. Map the reversed codes (the deployed ESPHome
-config has both standard and reversed handlers) or normalize the bit order.
-The SENSOR-dock emitter is weak, roughly 1–1.3 m; the BOX-3 → USB-UIRT direction
-needs the USB-UIRT close to the BOX-3.
-
-### Deploying the S3BOX remote on the host
-
-The S3BOX LIRC remote is committed in this repo. On the host
-(`192.0.2.6`):
-
-```bash
-cd <your clone>
-git fetch origin
-git checkout main
-git pull --ff-only
-
-sudo install -m 644 lirc/s3box.lircd.conf /etc/lirc/lircd.conf.d/
-sudo install -m 644 src/ir_bridge.py /opt/avr-tv-bridge/src/ir_bridge.py
-sudo systemctl restart lircd.socket lircd.service
-sudo systemctl restart avr-tv-bridge-ir.service
-systemctl --user restart irexec.service
-
-irsend LIST "" ""          # expect Vizio-TV and S3BOX
-irsend LIST S3BOX ""       # expect the 13 S3BOX keys
-```
-
-`sudo ./install.sh` is idempotent and installs the same files (plus the
-services), but it also re-runs package/venv setup; the targeted copy above is
-enough for this change.
-
-**Test:** from the host, run `irsend SEND_ONCE S3BOX KEY_OK`. The BOX-3's
-`IR last RX` diagnostic should show `addr=0xC63E cmd=0xA000`, and Home
-Assistant should receive `esphome.ir_received` with `remote: S3BOX`,
-`key: KEY_OK`. The HA `event.ir_blaster_ir_received` entity gains the S3BOX
-keys after the IR bridge reconnects and republishes discovery.
-
-The BOX-3 side can also be checked before the host is updated: call
-`esphome.esp32_s3_box_3_send_ir` with address `0xC63E` (50750), command
-`0xA000` (40960), and `repeats: 1`. The BOX-3 self-receives the transmission
-and its S3BOX `KEY_OK` handler fires.
-
-> **Aim matters.** The BOX-3's IR LED and receiver are on the front of the unit;
-> the USB-UIRT must be in direct line of sight. If no burst is captured, verify the USB-UIRT is the active LIRC device and that `mode2`/`lircd` see a known physical remote.
+No particular remote or IR device is required: the bridge works with any LIRC
+remote, and you can run it with none of the optional profiles installed. The
+repo includes example profiles for a TV remote and, optionally, an
+ESP32-S3-BOX-3 (`lirc/s3box.lircd.conf`). The S3BOX example link is documented
+separately in [`IR-S3BOX-EXAMPLE.md`](IR-S3BOX-EXAMPLE.md); skip it unless you
+use that hardware.
 
