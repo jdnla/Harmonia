@@ -6,7 +6,8 @@
 #   make restart  Restart the running bridge service.
 #   make status   Show service status.
 #   make logs     Follow the service journal.
-#   make test     Syntax-check all Python modules + the install script.
+#   make test     Syntax-check all Python modules + the install script, then run
+#                 the unit tests in tests/ (stdlib unittest, no deps needed).
 #
 # `deploy` is safe to run repeatedly. It updates the deployed service in
 # /opt/avr-tv-bridge from whatever is committed on the current branch's remote.
@@ -17,7 +18,7 @@ VENV        := $(INSTALL_DIR)/venv
 PYTHON      := $(VENV)/bin/python
 PIP         := $(VENV)/bin/pip
 
-.PHONY: deploy install restart status logs test rebuild-venv _sync _deps
+.PHONY: deploy install restart status logs test unit rebuild-venv _sync _deps
 
 rebuild-venv: ## Recreate the venv (needed after an OS Python-version upgrade)
 	@echo "==> Rebuilding venv at $(VENV) (fixes ModuleNotFoundError after a"
@@ -36,6 +37,8 @@ deploy: ## Pull latest and update the running service
 	git pull --ff-only
 	@$(MAKE) --no-print-directory _sync
 	@$(MAKE) --no-print-directory _deps
+	@echo "==> Installing harmonia wrapper"
+	sudo install -m 755 setup/harmonia /usr/local/bin/harmonia
 	@echo "==> Restarting $(SERVICE)"
 	sudo systemctl restart $(SERVICE)
 	@sleep 2
@@ -44,10 +47,12 @@ deploy: ## Pull latest and update the running service
 		|| { echo "!! $(SERVICE) is not active — check: journalctl -u $(SERVICE) -n 30"; exit 1; }
 
 _sync: ## Copy source into the installed location
-	@echo "==> Syncing src/ into $(INSTALL_DIR)"
-	@# The install dir is owned by the running user, so no sudo needed here.
-	mkdir -p $(INSTALL_DIR)/src
-	cp -f src/*.py $(INSTALL_DIR)/src/
+	@echo "==> Syncing src/ and setup/ into $(INSTALL_DIR)"
+	@# Use rsync --delete so removed/renamed brand modules do not linger in
+	@# /opt and get auto-loaded alongside their replacements.
+	mkdir -p $(INSTALL_DIR)/src $(INSTALL_DIR)/setup
+	rsync -a --delete --exclude '__pycache__' src/ $(INSTALL_DIR)/src/
+	rsync -a --delete --exclude '__pycache__' setup/ $(INSTALL_DIR)/setup/
 
 _deps: ## Update venv deps if requirements.txt changed
 	@echo "==> Ensuring Python deps are current"
@@ -65,10 +70,15 @@ status: ## Show service status
 logs: ## Follow the service log
 	journalctl -u $(SERVICE) -f
 
-test: ## Syntax-check Python + install.sh
+test: ## Syntax-check Python + install.sh, then run the unit tests
 	@ok=1; \
 	for f in src/*.py setup/*.py; do \
 		python3 -m py_compile "$$f" && echo "  OK   $$f" || { echo "  FAIL $$f"; ok=0; }; \
 	done; \
 	bash -n install.sh && echo "  OK   install.sh" || { echo "  FAIL install.sh"; ok=0; }; \
 	[ $$ok -eq 1 ] && echo "All checks passed" || { echo "Some checks failed"; exit 1; }
+	@$(MAKE) --no-print-directory unit
+
+unit: ## Run the unit tests (stdlib unittest; no runtime deps needed)
+	@echo "==> Unit tests"
+	@python3 -m unittest discover -s tests -t tests

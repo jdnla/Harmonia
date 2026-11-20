@@ -125,6 +125,55 @@ class Device(abc.ABC):
         except Exception as e:  # pragma: no cover - defensive
             return False, f"error: {e}"
 
+    # ---- Optional management hooks used by `harmonia device` ----------------
+    # Drivers may implement any of these; the CLI reports a clear error for the
+    # ones they do not. Keeping the hook names here documents the extension
+    # point, so a new TV/receiver driver never requires a CLI edit.
+
+    #: False when the driver knows input-name writes are rejected/unsafe.
+    input_name_writes_safe = True
+    #: Human-readable guidance shown when input_name_writes_safe is False.
+    input_name_hint = ""
+
+    @classmethod
+    def pair(cls, env, host=None, token_file=None) -> dict:
+        """Optional one-time pairing; return config.env updates on success."""
+        raise NotImplementedError(f"{cls.__name__} does not support pairing")
+
+    def get_profile(self) -> dict:
+        """Optional diagnostics dictionary (firmware, audio, inputs, ...)."""
+        raise NotImplementedError(f"{type(self).__name__} does not expose a profile")
+
+    def list_named_inputs(self) -> list[tuple[str, str]]:
+        """Optional [(hardware_name, friendly_name)] for display inputs."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not expose named inputs")
+
+    def get_input_visibility(self) -> dict[str, str]:
+        """Optional map of input CNAME -> driver visibility value."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not expose input visibility")
+
+    @staticmethod
+    def input_cname(hardware_name: str) -> str:
+        """Map a hardware input name to the driver's internal key."""
+        return hardware_name
+
+    def set_input_name(self, hardware_name: str, name: str) -> bool:
+        """Optional input rename; return True on verified success."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement input-name writes")
+
+    def set_input_visibility(self, hardware_name: str, visible: bool) -> bool:
+        """Optional input show/hide; return True on verified success."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement input visibility")
+
+    def send_key_sequence(self, spec: str) -> bool:
+        """Optional remote-key sequence; return True when accepted."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement key sequences")
+
 
 class AVReceiver(Device):
     """An AV receiver / amplifier. Audio authority when present."""

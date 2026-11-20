@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+#
+# harmonia — one command to set up, diagnose, and manage the Harmonia media
+# bridge. Installed to /usr/local/bin by install.sh. Wraps the venv python so the
+# setup/doctor/driver tools always run with the right deps.
+#
+# Usage:
+#   harmonia setup                 # interactive discovery + config wizard
+#   harmonia doctor                # read-only health check
+#   harmonia list                  # list registered device drivers
+#   harmonia driver new <role> <n> # scaffold a new driver plugin
+#   harmonia pair [host] [--driver D] # pair the configured display/receiver
+#   harmonia device list           # configured + registered device drivers
+#   harmonia device state [--role receiver]  # normalized device state
+#   harmonia device profile [--driver vizio] # read display diagnostics
+#   harmonia device inputs [--driver vizio]  # list display inputs/visibility
+#   harmonia device key [--driver vizio] "MENU 1 9 9 9"
+#   harmonia hotkeys               # (re)register Meta+F11/F12 power on/off keys
+#   harmonia start|stop|restart [target]   # all services, or one:
+#                                  #   bridge (system) | launcher | cecnav (user)
+#   harmonia status                # concise health of all services
+#   harmonia logs [-f] [target]    # logs for bridge (default), launcher, cecnav
+#   harmonia config list           # show current config.env values
+#   harmonia config get <KEY>      # print one value
+#   harmonia config set <KEY> <V>  # set a value (keeps a .bak); restart to apply
+#
+# Run lifecycle commands as your normal user (not sudo); the bridge is a system
+# service so those steps re-invoke sudo themselves.
+#
+set -euo pipefail
+
+INSTALL_DIR="/opt/avr-tv-bridge"
+VENV_PY="$INSTALL_DIR/venv/bin/python"
+SETUP_DIR="$INSTALL_DIR/setup"
+SVC="avr-tv-bridge.service"
+USER_SVCS=(avr-tv-bridge-launcher.service avr-tv-bridge-cecnav.service)
+
+# Fall back to a repo checkout if not installed to /opt (dev use).
+if [[ ! -x "$VENV_PY" ]]; then
+  SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -d "$SELF_DIR/setup" ]]; then
+    REPO_DIR="$SELF_DIR"
+  else
+    REPO_DIR="$(dirname "$SELF_DIR")"
+  fi
+  SETUP_DIR="$REPO_DIR/setup"
+  VENV_PY="$(command -v python3)"
+fi
+
+py() { "$VENV_PY" "$SETUP_DIR/$1" "${@:2}"; }
+
+# Map a friendly target name -> "scope unit". scope is "system" or "user".
+# With no target, callers iterate ALL_TARGETS.
+ALL_TARGETS=(bridge launcher cecnav)
+resolve_target() {
+  case "$1" in
+    bridge|avr-tv-bridge|avr-tv-bridge.service)
+      echo "system $SVC" ;;
+    launcher|avr-tv-bridge-launcher|avr-tv-bridge-launcher.service)
+      echo "user avr-tv-bridge-launcher.service" ;;
+    cecnav|cec|avr-tv-bridge-cecnav|avr-tv-bridge-cecnav.service)
+      echo "user avr-tv-bridge-cecnav.service" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Run a systemctl action on one resolved "scope unit".
+svc_action() {
+  local action="$1" scope="$2" unit="$3"
+  if [[ "$scope" == "system" ]]; then
+    sudo systemctl "$action" "$unit"
+  else
+    systemctl --user "$action" "$unit"
+  fi
+}
+
+# Apply an action to a target arg (one target) or all services if none given.
+lifecycle() {
+  local action="$1" target="${2:-}"
+  if [[ -n "$target" ]]; then
+    local res; res="$(resolve_target "$target")" || {
+      echo "Unknown target: $target (use: ${ALL_TARGETS[*]})" >&2; exit 2; }
+    echo "==> ${action} ${res#* }"
+    svc_action "$action" $res
+  else
+    local t res
+    for t in "${ALL_TARGETS[@]}"; do
+      res="$(resolve_target "$t")"
+      echo "==> ${action} ${res#* }"
+      svc_action "$action" $res || true
+    done
+  fi
+}
+
+warn_root() {
+  if [[ $EUID -eq 0 ]]; then
+    echo "Note: run '$1' as your normal user, not root (config + user services" \
+         "live in your home)." >&2
+  fi
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  setup)
+    warn_root setup
+    py harmonia_setup.py "$@" ;;
+  doctor|check|health)
+    warn_root doctor
+    py harmonia_doctor.py "$@" ;;
+  list|drivers)
+    py harmonia_driver.py list ;;
+  driver)
+    py harmonia_driver.py "$@" ;;
+  pair)
+    py device_tools.py pair "$@" ;;
+  device)
+    py device_tools.py "$@" ;;
+  hotkeys)
+    warn_root hotkeys
+    bash "$SETUP_DIR/register_hotkeys.sh" "$@" ;;
+  start|stop|restart)
+    lifecycle "$cmd" "${1:-}" ;;
+  status)
+    # Concise health line per service (active/inactive/failed), then hint.
+    for t in "${ALL_TARGETS[@]}"; do
+      res="$(resolve_target "$t")"; scope="${res%% *}"; unit="${res#* }"
+      if [[ "$scope" == "system" ]]; then
+        state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+      else
+        state="$(systemctl --user is-active "$unit" 2>/dev/null || true)"
+      fi
+      case "$state" in
+        active)   mark="[ok]  " ;;
+        inactive|failed|"") mark="[DOWN]" ;;
+        *)        mark="[$state]" ;;
+      esac
+      printf '  %s %-12s (%s) %s\n' "$mark" "$t" "$scope" "$unit"
+    done
+    echo "  (full detail: harmonia logs [target]; deep check: harmonia doctor)" ;;
+  logs)
+    follow=""; [[ "${1:-}" == "-f" ]] && { follow="-f"; shift || true; }
+    tgt="${1:-bridge}"
+    res="$(resolve_target "$tgt")" || {
+      echo "Unknown target: $tgt (use: ${ALL_TARGETS[*]})" >&2; exit 2; }
+    scope="${res%% *}"; unit="${res#* }"
+    if [[ "$scope" == "system" ]]; then
+      if [[ -n "$follow" ]]; then journalctl -u "$unit" -f
+      else journalctl -u "$unit" -e --no-pager; fi
+    else
+      if [[ -n "$follow" ]]; then journalctl --user -u "$unit" -f
+      else journalctl --user -u "$unit" -e --no-pager; fi
+    fi ;;
+  config)
+    py harmonia_config.py "$@" ;;
+  help|--help|-h|"")
+    # Print the header comment block (skip the shebang; stop at first code line).
+    awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' \
+      "${BASH_SOURCE[0]}" ;;
+  *)
+    echo "Unknown command: $cmd (try 'harmonia help')" >&2; exit 2 ;;
+esac

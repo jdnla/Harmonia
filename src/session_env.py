@@ -14,6 +14,9 @@ import os
 log = logging.getLogger("session_env")
 
 # The env vars a GUI app needs to reach the compositor / session bus.
+# The KDE_* / XDG_CURRENT_DESKTOP vars are needed by kdotool v0.3.0, which
+# refuses to run ("Unsupported KDE version") unless it can see KDE_SESSION_VERSION
+# — so window find/focus/fullscreen/close all silently fail without it.
 _WANTED = (
     "WAYLAND_DISPLAY",
     "DISPLAY",
@@ -21,6 +24,9 @@ _WANTED = (
     "DBUS_SESSION_BUS_ADDRESS",
     "XDG_SESSION_TYPE",
     "XAUTHORITY",
+    "KDE_SESSION_VERSION",
+    "KDE_FULL_SESSION",
+    "XDG_CURRENT_DESKTOP",
 )
 
 # Processes that reliably carry a full graphical-session environment.
@@ -66,7 +72,10 @@ def graphical_env() -> dict[str, str]:
     plasmashell/kwin process owned by the current user.
     """
     env = dict(os.environ)
-    if all(k in env for k in ("WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR")):
+    # KDE_SESSION_VERSION is in the required set because kdotool v0.3.0 needs it;
+    # without it window ops silently fail even when WAYLAND_DISPLAY etc. are set.
+    if all(k in env for k in ("WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS",
+                              "XDG_RUNTIME_DIR", "KDE_SESSION_VERSION")):
         return env
 
     my_uid = os.getuid()
@@ -79,8 +88,10 @@ def graphical_env() -> dict[str, str]:
                 continue
             src = _read_environ(pid)
             if "WAYLAND_DISPLAY" in src or "DISPLAY" in src:
+                # Fill any missing wanted var from the session process (don't
+                # clobber values we already have).
                 for k in _WANTED:
-                    if k in src:
+                    if k in src and k not in env:
                         env[k] = src[k]
                 log.debug("Merged session env from %s (pid %s)", proc, pid)
                 return env

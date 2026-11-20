@@ -35,18 +35,37 @@ log = logging.getLogger("launcher")
 # fullscreen: force the window fullscreen after launch/focus (default True).
 # launch_wait: max seconds to wait for the window to appear after launching,
 #              so we can fullscreen it.
-# Default AV source for launched apps: the media PC is on the AVR's MPLAY input
-# and the TV's HDMI-1. When an app is launched via a remote NUMBER button, the
-# launcher nudges the AVR/TV back to this source IF a device is powered on but on
-# the wrong input (see source_sync.ensure_source — only acts when actually
-# wrong, never touches power). Override per-app by giving that app its own
-# "source" dict (e.g. a future button that wants a different AVR source):
+# Default AV source for launched apps: the host is on the AVR's MPLAY input
+# and whichever TV input the bridge has AUTO-DETECTED (see _default_source).
+# When an app is launched via a remote NUMBER button, the launcher nudges the
+# AVR/TV back to this source IF a device is powered on but on the wrong input
+# (see source_sync.ensure_source — only acts when actually wrong, never touches
+# power). Override per-app by giving that app its own "source" dict (e.g. a
+# future button that wants a different AVR source):
 #   "source": {"avr": "GAME", "tv": "HDMI-2"}
-# Keys are optional: include only the device you want corrected.
-DEFAULT_SOURCE = {
-    "avr": os.environ.get("SCENE_AVR_INPUT", "MPLAY"),
-    "tv": os.environ.get("SCENE_TV_INPUT", "HDMI-1"),
-}
+# Keys are optional: include only the device you want corrected. A per-app
+# "source" bypasses TV auto-detection (it's an explicit choice).
+_FALLBACK_TV_INPUT = os.environ.get("SCENE_TV_INPUT", "HDMI-1")
+
+
+def _default_source() -> dict:
+    """Build the default AV source at launch time.
+
+    The TV input is read from the bridge's detected value (retained MQTT
+    topic) so it follows the physical wiring instead of a hardcoded HDMI port;
+    it falls back to SCENE_TV_INPUT if the bridge hasn't published. Resolved
+    per-launch (not at import) because the irexec/CLI path doesn't load
+    config.env before import, and the wiring can change between launches.
+    """
+    return {
+        "avr": os.environ.get("SCENE_AVR_INPUT", "MPLAY"),
+        "tv": source_sync.retained_tv_input(_FALLBACK_TV_INPUT),
+    }
+
+# Per-app Chrome profile dirs live here. Each Chrome --app gets its own so it's
+# an independent process (see the chrome_app apps below).
+_CHROME_PROFILES = os.path.expanduser(
+    os.environ.get("CHROME_PROFILES_DIR", "~/.config/harmonia-chrome"))
 
 APPS: dict[str, dict] = {
     "plex": {
@@ -98,11 +117,20 @@ APPS: dict[str, dict] = {
         # and pam_kwallet5 doesn't match the running kwalletd6), so Chrome
         # couldn't decrypt its saved Netflix auth cookie and logged us out every
         # boot. 'basic' removes the keyring dependency so the login persists.
+        # Each Chrome --app runs in its OWN isolated profile (--user-data-dir) so
+        # it's a fully independent browser process: independently launchable,
+        # closable, and crash-isolated. Without this, ONE shared Chrome process
+        # serves every --app window, so a wedged/closed window drags the others
+        # down and you can't close one app without the other. Cost: separate
+        # cookie store => one-time login per app (persists afterward).
         "launch": ["google-chrome", "--ozone-platform=wayland",
                    "--password-store=basic",
+                   f"--user-data-dir={_CHROME_PROFILES}/netflix",
                    "--start-fullscreen", "--app=https://www.netflix.com"],
-        # Detect the specific Chrome --app process (the app= URL is in argv).
-        "proc": r"chrome.*--app=https://www\.netflix\.com",
+        # chrome_app=True => window-only running check + per-app wedged-Chrome
+        # recovery (see activate()). No "proc" match: unreliable for Chrome.
+        "chrome_app": True,
+        "profile": "netflix",
         "fullscreen": True,
         "launch_wait": 15,
     },
@@ -132,18 +160,16 @@ APPS: dict[str, dict] = {
     },
     "sportsnet": {
         "label": "Sportsnet",
-        # Chrome --app window. Confirmed class empirically:
-        # chrome-watch.sportsnet.ca__-Default (window name "Sportsnet").
+        # Isolated Chrome profile + stable window class (see Netflix above).
         "match": [("class", r"(?i)^chrome-watch\.sportsnet\.ca")],
-        # NOTE: --enable-spatial-navigation removed here too (see Netflix above) —
-        # it caused an OK/Space double play/pause toggle on the playback screen.
         # --password-store=basic for login persistence under passwordless
-        # autologin (see Netflix above — keeps Chrome's cookie key out of the
-        # never-unlocked KDE wallet).
-        "launch": ["google-chrome-stable", "--ozone-platform=wayland",
+        # autologin (keeps Chrome's cookie key out of the never-unlocked wallet).
+        "launch": ["google-chrome", "--ozone-platform=wayland",
                    "--password-store=basic",
+                   f"--user-data-dir={_CHROME_PROFILES}/sportsnet",
                    "--start-fullscreen", "--app=https://watch.sportsnet.ca/"],
-        "proc": r"chrome.*--app=https://watch\.sportsnet\.ca",
+        "chrome_app": True,
+        "profile": "sportsnet",
         "fullscreen": True,
         "launch_wait": 15,
     },
@@ -160,9 +186,24 @@ APPS: dict[str, dict] = {
         # radeonsi/swrast", so Electron can't make a GL context and never maps a
         # window. XWayland is the working path (input/fullscreen all fine).
         # fullscreen=True: the launcher forces it fullscreen after it maps.
+        # Installed from the official .deb (/opt/IPTVnator), NOT the snap. The
+        # snap was stuck in software rendering (laggy) — its confined GL stack
+        # couldn't init a GPU context (ANGLE error 12289 / Vulkan missing ext on
+        # every --use-gl path), while the .deb runs unconfined against the host
+        # mesa/radeonsi and gets real hardware acceleration. Runs under XWayland
+        # (--ozone-platform=x11, the vendor default). Dedup relies on the PROCESS
+        # check, not the window: it's an XWayland window and kdotool (a) panics
+        # on KWin's /Scripting and (b) can't see XWayland windows, so
+        # find_window() returns None. The proc regex matches the Electron main +
+        # helper processes (/opt/IPTVnator/iptvnator.bin ...).
         "match": [("class", r"(?i)^iptvnator$")],
-        "launch": ["snap", "run", "iptvnator"],
-        "proc": r"iptvnator/.*/iptvnator\.bin",
+        "launch": ["/opt/IPTVnator/iptvnator", "--ozone-platform=x11"],
+        "proc": r"iptvnator\.bin",
+        # Snap cold-start (mount + apparmor + Electron) can exceed the default
+        # 12s cooldown before the process is visible to pgrep, which let a second
+        # tile/remote press spawn a duplicate. 30s covers the worst-case cold
+        # start so re-presses focus (via proc) instead of launching again.
+        "cooldown": 30,
         "fullscreen": True,
         "launch_wait": 25,
     },
@@ -185,7 +226,10 @@ class Launcher:
             return ""
 
     def _all_windows(self) -> list[str]:
-        out = self._kdo("search", "")
+        # kdotool v0.3.0's empty pattern ("") matches NOTHING; "." matches any
+        # window with a non-empty name/class (i.e. every real app window), which
+        # is what we want to enumerate before filtering by the per-app regex.
+        out = self._kdo("search", ".")
         return [w for w in out.splitlines() if w.strip()]
 
     def _window_attr(self, wid: str, attr: str) -> str:
@@ -284,10 +328,10 @@ class Launcher:
 
         # Correct the AV source in the background (only acts if a device is on
         # the wrong input; never touches power). Fires for both launch and
-        # focus so switching back to an app also fixes the source. Per-app
-        # "source" overrides DEFAULT_SOURCE.
+        # focus so switching back to an app also fixes the source. A per-app
+        # "source" overrides the auto-detected default.
         if sync_source:
-            src = spec.get("source", DEFAULT_SOURCE)
+            src = spec.get("source") or _default_source()
             try:
                 self._source_thread = source_sync.ensure_source_async(src)
             except Exception as e:
@@ -303,7 +347,18 @@ class Launcher:
 
         # Focus + fullscreen the window (whether we launched or it existed).
         wid = self.find_window(app_key)
-        if not wid and want_fs:
+        if not wid:
+            wid = self._wait_for_window(app_key, spec.get("launch_wait", 15))
+        # Wedged-Chrome recovery: if a Chrome --app launched but no window ever
+        # appeared, its isolated profile's Chrome is wedged. Kill ONLY that app's
+        # process (safe now that each app has its own profile — never touches the
+        # others) and relaunch once.
+        if not wid and spec.get("chrome_app") and launched == "launched":
+            log.warning("%s launched but no window — assuming wedged Chrome; "
+                        "killing this app's profile and retrying once", app_key)
+            self._kill_chrome_profile(app_key)
+            time.sleep(1)
+            self._decide_and_launch(app_key)   # relaunch (window-only check)
             wid = self._wait_for_window(app_key, spec.get("launch_wait", 15))
         if wid:
             self._kdo("windowactivate", wid)
@@ -313,16 +368,100 @@ class Launcher:
             log.warning("%s window did not appear in time", app_key)
         return launched
 
+    # ---- close / kill ----
+    def _kill_chrome_profile(self, app_key: str, sig: str = "-TERM") -> bool:
+        """Kill the Chrome process for one app's isolated profile only. Matches
+        on the unique --user-data-dir so it never affects other apps' Chrome."""
+        profile = APPS.get(app_key, {}).get("profile")
+        if not profile:
+            return False
+        # Match the unique profile PATH (not "--user-data-dir=..."): a pattern
+        # starting with "--" makes pkill/pgrep treat it as options. The path is
+        # unique to this app's Chrome cmdline, so it never hits another app.
+        pat = f"{_CHROME_PROFILES}/{profile}"
+        try:
+            subprocess.run(["pkill", sig, "-f", pat], timeout=5)
+            return True
+        except (OSError, subprocess.SubprocessError) as e:
+            log.warning("kill %s chrome failed: %s", app_key, e)
+            return False
+
+    def close(self, app_key: str) -> str:
+        """Close one app without affecting others. For Chrome --app apps this
+        kills only that app's isolated profile process; for others it closes the
+        matched window via the window manager. Returns 'closed' or 'not-running'.
+        """
+        if app_key not in APPS:
+            return "unknown"
+        spec = APPS[app_key]
+        if spec.get("chrome_app"):
+            if not self.find_window(app_key) and not self._chrome_profile_running(app_key):
+                return "not-running"
+            # graceful, then force any straggler
+            self._kill_chrome_profile(app_key, "-TERM")
+            time.sleep(1.5)
+            self._kill_chrome_profile(app_key, "-KILL")
+            log.info("%s closed (isolated profile killed)", app_key)
+            return "closed"
+        # Non-Chrome app: prefer a graceful window close, but NEVER rely on the
+        # window manager alone — kdotool is unreliable here (panics on KWin's
+        # /Scripting, and can't see XWayland windows like IPTVnator), so
+        # find_window() often returns None even when the app is up. Fall back to
+        # killing the app's process by its unique proc pattern (TERM then KILL).
+        wid = self.find_window(app_key)
+        if wid:
+            self._kdo("windowclose", wid)
+            log.info("%s window closed", app_key)
+            return "closed"
+        pat = spec.get("proc")
+        if pat and self._proc_running(app_key):
+            try:
+                subprocess.run(["pkill", "-TERM", "-f", pat], timeout=5)
+                time.sleep(1.5)
+                if self._proc_running(app_key):
+                    subprocess.run(["pkill", "-KILL", "-f", pat], timeout=5)
+                log.info("%s closed (process killed via %r)", app_key, pat)
+                return "closed"
+            except (OSError, subprocess.SubprocessError) as e:
+                log.warning("close %s via pkill failed: %s", app_key, e)
+        return "not-running"
+
+    def _chrome_profile_running(self, app_key: str) -> bool:
+        profile = APPS.get(app_key, {}).get("profile")
+        if not profile:
+            return False
+        pat = f"{_CHROME_PROFILES}/{profile}"   # path, not --user-data-dir=
+        try:
+            r = subprocess.run(["pgrep", "-f", pat], capture_output=True, timeout=5)
+            return r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
     @staticmethod
     def _runtime_dir() -> str:
         return os.environ.get("XDG_RUNTIME_DIR", "/tmp")
 
     # Seconds after a launch during which we will NOT launch the same app again.
     # Covers the startup gap: between Popen and the app's process/window becoming
-    # detectable (snap/Chrome take 1-3s), a second button press would otherwise
-    # pass the "not running" check and spawn a duplicate. A stamp file written
-    # under the lock closes that gap. Configurable via LAUNCH_COOLDOWN_SECS.
+    # detectable, a second button press would otherwise pass the "not running"
+    # check and spawn a duplicate. A stamp file written under the lock closes
+    # that gap. This cooldown is the PRIMARY duplicate guard for slow-starting
+    # apps because window detection (kdotool) is unreliable here — it talks to
+    # KWin's /Scripting over D-Bus and currently panics, and it can't see
+    # XWayland windows (e.g. IPTVnator) at all — so find_window() silently
+    # returns None and only the process check + this cooldown stand between a
+    # double-press and a duplicate. Snap cold-starts (mount+apparmor+Electron)
+    # can take >12s before the process is even visible to pgrep, so apps that
+    # cold-start slowly set a longer per-app "cooldown". Global default via
+    # LAUNCH_COOLDOWN_SECS.
     _LAUNCH_COOLDOWN = float(os.environ.get("LAUNCH_COOLDOWN_SECS", "12"))
+
+    def _cooldown_for(self, app_key: str) -> float:
+        """Per-app launch cooldown (falls back to the global default)."""
+        try:
+            return float(APPS[app_key].get("cooldown", self._LAUNCH_COOLDOWN))
+        except (TypeError, ValueError):
+            return self._LAUNCH_COOLDOWN
 
     def _recent_launch(self, app_key: str) -> bool:
         """True if this app was launched within the cooldown window (its startup
@@ -332,7 +471,7 @@ class Launcher:
             age = time.time() - os.path.getmtime(stamp)
         except OSError:
             return False
-        return age < self._LAUNCH_COOLDOWN
+        return age < self._cooldown_for(app_key)
 
     def _mark_launched(self, app_key: str):
         stamp = f"{self._runtime_dir()}/avr-launch-{app_key}.stamp"
@@ -352,7 +491,16 @@ class Launcher:
         lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            if self.find_window(app_key) or self._proc_running(app_key):
+            # Chrome --app apps: decide by WINDOW only. Their proc match is
+            # unreliable (one shared browser process, stale cmdline), which is
+            # what made the launcher "focus" a window that no longer existed and
+            # spin. Non-Chrome apps still use the proc fallback for the startup
+            # gap.
+            chrome_app = APPS[app_key].get("chrome_app")
+            running = self.find_window(app_key)
+            if not chrome_app and not running:
+                running = self._proc_running(app_key)
+            if running:
                 log.info("%s already running — focusing, not relaunching", app_key)
                 return "focused"
             # Startup-gap guard: a very recent launch may not be detectable as
@@ -391,10 +539,19 @@ class Launcher:
 
 def main(argv: list[str]) -> int:
     logging.basicConfig(level="INFO", format="%(levelname)s %(name)s: %(message)s")
-    if len(argv) != 2 or argv[1] in ("-h", "--help"):
-        print(f"Usage: {argv[0]} <app>   (apps: {', '.join(APPS)})")
+    # Usage: launcher.py <app>            -> launch/focus
+    #        launcher.py close <app>      -> close just that app (not the others)
+    if len(argv) < 2 or argv[1] in ("-h", "--help"):
+        print(f"Usage: {argv[0]} <app> | close <app>   (apps: {', '.join(APPS)})")
         return 2
     launcher = Launcher()
+    if argv[1] == "close":
+        if len(argv) != 3:
+            print(f"Usage: {argv[0]} close <app>")
+            return 2
+        result = launcher.close(argv[2])
+        print(result)
+        return 0 if result in ("closed", "not-running") else 1
     result = launcher.activate(argv[1])
     print(result)
     # The number-button/CLI process exits right after this; wait for the source

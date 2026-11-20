@@ -3,7 +3,8 @@
 # can launch/focus GUI apps.
 #
 # Button names must match those emitted by the loaded remote config
-# (see lirc/vizio.lircd.conf: KEY_1, KEY_2, ... KEY_UP, KEY_DOWN, etc.).
+# (see src/drivers/vizio/lirc/vizio.lircd.conf: KEY_1, KEY_2, ... KEY_UP,
+# KEY_DOWN, etc.).
 # Run `irw` to confirm the exact names your remote sends.
 #
 # LAUNCH_CMD is substituted by install.sh with the absolute path to

@@ -1,0 +1,24 @@
+[Unit]
+Description=Harmonia IR bridge (USB-UIRT <-> Home Assistant over MQTT)
+After=network-online.target lircd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Runs as ROOT (deliberately, unlike the other services): the learn flow stops
+# and starts lircd, opens the FTDI serial device for raw capture, and writes
+# /etc/lirc configs. Receive/send alone would work unprivileged (the lircd
+# socket is world-rw) but learning is the deciding factor.
+# EnvironmentFile (MQTT creds) and the IREXEC_* hints are filled in by install.sh.
+EnvironmentFile=/home/USER/.config/avr-tv-bridge/config.env
+Environment=IREXEC_USER=USER
+Environment=IREXEC_UID=1000
+WorkingDirectory=/opt/avr-tv-bridge/src
+ExecStart=/opt/avr-tv-bridge/venv/bin/python /opt/avr-tv-bridge/src/ir_bridge.py
+Restart=on-failure
+RestartSec=5
+# Give the broker a moment on boot before connecting.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do nc -z ${MQTT_HOST} ${MQTT_PORT} 2>/dev/null && exit 0; sleep 2; done; exit 0'
+
+[Install]
+WantedBy=multi-user.target

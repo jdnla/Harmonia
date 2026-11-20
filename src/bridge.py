@@ -8,7 +8,7 @@ The bridge is composed from config: pick a receiver driver, a display driver, or
 becomes the audio authority if it declares volume/mute. Scenes, the power-sync
 watchdog, and HA discovery all adapt to which roles are present.
 
-Run as a systemd service on the media PC. Configuration comes from environment
+Run as a systemd service on the host. Configuration comes from environment
 variables (see config.env), loaded by the systemd unit via EnvironmentFile.
 
 Back-compat: the MQTT device-id slugs (default "denon"/"vizio") and all HA
@@ -84,9 +84,20 @@ class Bridge:
         # for back-compat.
         self.scene_avr_input = env("SCENE_AVR_INPUT", "MPLAY")
         self.scene_tv_input = env("SCENE_TV_INPUT", "HDMI-1")
+        # Optional friendly-name hint(s) to auto-detect which TV input the
+        # media-center chain is on (comma-separated substrings, e.g.
+        # "AVR-X1800H"). Empty => derive from the receiver's model/name. See
+        # _resolve_display_input(). The detected input is what the scene
+        # actually switches the TV to; scene_tv_input is only the fallback.
+        self.scene_tv_input_match = env("SCENE_TV_INPUT_MATCH", "")
+        self._resolved_tv_input = None  # cached last detection (None until run)
         self.scene_power_timeout = float(env("SCENE_POWER_TIMEOUT", "15"))
         self.scene_poll_interval = float(env("SCENE_POLL_INTERVAL", "1.0"))
         self.scene_input_settle = float(env("SCENE_INPUT_SETTLE", "1.5"))
+
+        # Read-only SmartCast diagnostics (firmware/audio/ads/input visibility).
+        self.tv_profile_interval = float(env("VIZIO_PROFILE_INTERVAL", "60"))
+        self._next_tv_profile = 0.0
 
         # Power-sync watchdog: keep the receiver's power in sync with the display
         # (display is source of truth). Only meaningful when BOTH roles exist.
@@ -196,7 +207,19 @@ class Bridge:
             except Exception:
                 pass
         self._publish_discovery()
+        # Detect + publish which TV input the media-center chain is on, so the
+        # scene and the launcher's source-sync both target the real input
+        # instead of a hardcoded HDMI port. Best-effort; never blocks startup.
+        try:
+            self._resolve_display_input()
+        except Exception as e:
+            log.debug("initial TV input detection skipped: %s", e)
+        try:
+            self._poll_tv_profile(force=True)
+        except Exception as e:
+            log.debug("initial TV profile read skipped: %s", e)
         client.subscribe(f"{BASE}/+/+/set")
+        client.subscribe(f"{BASE}/+/key/+/set")
         client.subscribe(f"{BASE}/scene/+/set")
         threading.Thread(target=self._poll_once, daemon=True).start()
 
@@ -229,6 +252,14 @@ class Bridge:
         aa_id = self.audio_authority.mqtt_id if self.audio_authority else None
         entities += disc.build_hub_entities(
             vol_max=vol_max, vol_step=vol_step, audio_authority=aa_id)
+        # SmartCast-only diagnostics and key controls.
+        if self.display is not None:
+            if hasattr(self.display.driver, "get_tv_profile"):
+                entities += disc.build_tv_diagnostics(
+                    self.display.mqtt_id, label_prefix=self.display.label)
+            if hasattr(self.display.driver, "send_key_sequence"):
+                entities += disc.build_tv_controls(
+                    self.display.mqtt_id, label_prefix=self.display.label)
         for topic, payload in entities:
             self.client.publish(topic, disc.dumps(payload), retain=True)
         log.info("Published discovery for %d entities (incl. hub)", len(entities))
@@ -250,6 +281,12 @@ class Bridge:
                         self._scene_media_center_on()
                     else:
                         self._scene_media_center_off()
+                return
+            if len(parts) >= 5 and parts[2] == "key":
+                self._handle_tv_key(parts[1], parts[3])
+                return
+            if len(parts) >= 4 and parts[2] == "key_sequence":
+                self._handle_tv_key_sequence(parts[1], payload)
                 return
             # avr-tv-bridge/<dev>/<entity>/set
             _, dev, entity, _ = parts
@@ -279,12 +316,165 @@ class Bridge:
         time.sleep(0.4)
         self._poll_once()
 
+    def _tv_display(self, dev: str):
+        """Return the display managed device if it matches and supports keys."""
+        disp = self.display
+        if disp is None or disp.mqtt_id != dev:
+            return None
+        if not hasattr(disp.driver, "send_key_sequence"):
+            return None
+        return disp
+
+    def _handle_tv_key(self, dev: str, key: str):
+        disp = self._tv_display(dev)
+        if disp is None:
+            return
+        sequence = key.strip().upper()
+        if not sequence:
+            return
+        ok = disp.driver.send_key_sequence(sequence)
+        self._pub(f"{disc.state_base(dev)}/key_sequence/state", sequence)
+        log.info("TV key %s -> %s", sequence, "sent" if ok else "failed")
+
+    def _handle_tv_key_sequence(self, dev: str, payload: str):
+        disp = self._tv_display(dev)
+        if disp is None:
+            return
+        sequence = " ".join(payload.replace(",", " ").split())
+        if not sequence:
+            return
+        ok = disp.driver.send_key_sequence(sequence)
+        self._pub(f"{disc.state_base(dev)}/key_sequence/state", sequence)
+        log.info("TV key sequence %r -> %s", sequence,
+                 "sent" if ok else "failed")
+
+    def _poll_tv_profile(self, force: bool = False):
+        """Publish read-only TV diagnostics at a slower cadence than polling."""
+        disp = self.display
+        if disp is None or not hasattr(disp.driver, "get_tv_profile"):
+            return
+        if self.tv_profile_interval <= 0:
+            return
+        now = time.monotonic()
+        if not force and now < self._next_tv_profile:
+            return
+        self._next_tv_profile = now + max(5.0, self.tv_profile_interval)
+        try:
+            profile = disp.driver.get_tv_profile()
+        except Exception as e:
+            log.debug("TV profile read failed: %s", e)
+            return
+        if not profile or not profile.get("available"):
+            return
+        sb = disc.state_base(disp.mqtt_id)
+        self._pub(f"{sb}/tv/firmware/state", profile.get("firmware") or "unknown")
+        self._pub(f"{sb}/tv/speakers/state", profile.get("tv_speakers") or "unknown")
+        self._pub(f"{sb}/tv/earc/state", profile.get("earc") or "unknown")
+        self._pub(f"{sb}/tv/ad_tracking/state",
+                  profile.get("limit_ad_tracking") or "unknown")
+        self._pub(f"{sb}/tv/ad_replacement/state",
+                  profile.get("ad_replacement") or "unknown")
+        inputs = profile.get("inputs") or []
+        visible = profile.get("visible_inputs") or []
+        self._pub(f"{sb}/tv/inputs/state",
+                  f"{len(visible)} visible / {len(inputs)} total")
+        self._pub(f"{sb}/tv/inputs/attributes", json.dumps({
+            "visible": visible,
+            "inputs": inputs,
+            "visibility": profile.get("input_visibility") or {},
+        }, sort_keys=True))
+
+
+    def _resolve_display_input(self, publish: bool = True) -> str:
+        """Return the TV input the media-center scene should select.
+
+        Auto-detects it by matching the receiver's CEC name (or an explicit
+        SCENE_TV_INPUT_MATCH hint) against the TV's live input list, so we
+        follow the physical wiring instead of trusting a hardcoded HDMI port.
+        Falls back to the configured `scene_tv_input` whenever detection is
+        unavailable or ambiguous, so power-on is never worse than the static
+        config. Best-effort + fully guarded: any error returns the fallback.
+
+        When `publish` is set, the resolved value is published (retained) to
+        `avr-tv-bridge/scene/tv_input/state` so the launcher's source-sync can
+        follow the same input without its own TV credentials.
+        """
+        configured = self.scene_tv_input
+        resolved = configured
+        disp = self.display
+        lister = getattr(disp.driver, "list_named_inputs", None) if disp else None
+        if callable(lister):
+            try:
+                named = lister()  # [(hardware_name, friendly_name)]
+            except Exception as e:
+                log.debug("TV input auto-detect failed (%s); using %s",
+                          e, configured)
+                named = []
+            hints = self._input_match_hints()
+            if named and hints:
+                matches = []
+                for hw, friendly in named:
+                    f = (friendly or "").strip().lower()
+                    # Skip un-renamed/default inputs (friendly == hardware name):
+                    # only a CEC-named input identifies a connected device.
+                    if not f or f == (hw or "").strip().lower():
+                        continue
+                    if any(h in f or f in h for h in hints):
+                        matches.append(hw)
+                # Only override when EXACTLY one input matches — ambiguity or no
+                # match keeps the safe configured fallback.
+                if len(matches) == 1 and matches[0]:
+                    resolved = matches[0]
+                    if resolved != configured:
+                        log.info("scene: auto-detected TV input %s (matched %s) "
+                                 "— overriding configured %s",
+                                 resolved, hints, configured)
+                elif len(matches) > 1:
+                    log.info("scene: TV input ambiguous %s; using configured %s",
+                             matches, configured)
+                else:
+                    log.info("scene: no CEC-named TV input matched %s; using "
+                             "fallback %s (rename the input or set "
+                             "SCENE_TV_INPUT_MATCH)", hints, configured)
+        if resolved != self._resolved_tv_input:
+            self._resolved_tv_input = resolved
+        if publish:
+            self._pub(f"{BASE}/scene/tv_input/state", resolved)
+        return resolved
+
+    def _input_match_hints(self) -> list[str]:
+        """Lower-cased friendly-name substrings that identify our TV input.
+
+        Explicit SCENE_TV_INPUT_MATCH (comma-separated) wins; otherwise derive
+        from the receiver's model + name (the CEC device the TV sees). Returns
+        [] when there's nothing to match on (then detection is skipped).
+        """
+        hints: list[str] = []
+        if self.scene_tv_input_match.strip():
+            hints += [h.strip() for h in self.scene_tv_input_match.split(",")]
+        else:
+            recv = self.receiver
+            if recv is not None:
+                for attr in ("model", "name"):
+                    v = getattr(recv.driver, attr, None)
+                    if v:
+                        hints.append(str(v))
+        # Drop blanks + overly-generic one/two-char hints; de-dup, lower-case.
+        seen, out = set(), []
+        for h in hints:
+            h = h.strip().lower()
+            if len(h) >= 3 and h not in seen:
+                seen.add(h)
+                out.append(h)
+        return out
+
     def _scene_media_center_on(self):
         recv = self.receiver
         disp = self.display
+        tv_input = self._resolve_display_input()
         log.info("SCENE media_center_on -> receiver=%s display=%s",
                  self.scene_avr_input if recv else "-",
-                 self.scene_tv_input if disp else "-")
+                 tv_input if disp else "-")
         self._suppress_sync()
         # Power on: receiver before display (audio path ready first).
         if recv is not None:
@@ -301,8 +491,7 @@ class Bridge:
         if disp is not None:
             self._wait_powered_on(disp.mqtt_id, disp.driver)
             if CAP_INPUT in disp.capabilities:
-                self._set_input_verified(disp.mqtt_id, disp.driver,
-                                         self.scene_tv_input)
+                self._set_input_verified(disp.mqtt_id, disp.driver, tv_input)
 
         self._publish_hub_power("ON")
         self._poll_once()
@@ -394,6 +583,8 @@ class Bridge:
         # Power-sync only when both roles exist.
         if recv is not None and disp is not None:
             self._power_sync_check(r, v)
+
+        self._poll_tv_profile()
 
     def _power_sync_check(self, recv_state: dict, disp_state: dict):
         """Keep the receiver's power in sync with the display (display = truth)."""

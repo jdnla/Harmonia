@@ -26,6 +26,7 @@ import time
 
 from session_env import graphical_env
 import media_control
+from input_activity import InputActivity
 
 log = logging.getLogger("idle_off")
 
@@ -33,12 +34,23 @@ log = logging.getLogger("idle_off")
 class IdleOff:
     def __init__(self,
                  publish_off,                 # callable() -> fire off scene
-                 timeout_secs: int = 1800,    # 30 min
+                 timeout_secs: int = 1800,    # 30 min (FULL / "in-use" timeout)
                  warn_secs: int = 60,         # cancel window
                  enabled: bool = True,
-                 notifier=None):              # NotifyPopup for the warning toast
+                 notifier=None,               # NotifyPopup for the warning toast
+                 short_timeout_secs: int = 300,   # 5 min (fresh / unused window)
+                 adaptive: bool = True):
         self.publish_off = publish_off
-        self.timeout_secs = timeout_secs
+        self._long_timeout = int(timeout_secs)      # HA-adjustable "full" timeout
+        self._short_timeout = int(short_timeout_secs)
+        self._adaptive = adaptive
+        # Active timeout. Start on LONG — safe, since the system may already be in
+        # use when the service (re)starts. SHORT is entered on a fresh power-on
+        # (on_power_on); back to LONG on the first real input (_usage_watcher) and
+        # also after a power-off (so idle re-fires while off stay infrequent).
+        self.timeout_secs = self._long_timeout
+        self._usage_thread = None
+        self._defer_until = 0.0        # monotonic; suppress power-off until then
         self.warn_secs = warn_secs
         self._enabled = enabled
         self._notifier = notifier
@@ -73,6 +85,11 @@ class IdleOff:
         # screen for its full timeout even though the power-off was aborted —
         # which looks exactly like "the timeout didn't clear").
         self._warn_toast = None
+        # Independent input tracker (watches /dev/input directly). swayidle can go
+        # deaf and stop seeing input entirely, causing a false timeout even while
+        # the user presses the remote/keyboard. This is the reliable fallback we
+        # cross-check before ever powering off.
+        self._input = InputActivity()
 
     # ---- HA toggle ----
     def set_enabled(self, on: bool):
@@ -86,37 +103,74 @@ class IdleOff:
         return self._enabled
 
     # ---- HA-settable timeout ----
+    def _apply_timeout(self, secs: int):
+        """Switch the ACTIVE idle timeout and respawn swayidle so it re-arms with
+        the new value (the _run loop rebuilds its command each spawn); a pending
+        warning is canceled so the change applies cleanly from now."""
+        secs = int(secs)
+        if secs == self.timeout_secs:
+            return
+        self.timeout_secs = secs
+        self._cancel_warning()
+        if self._sway is not None and self._sway.poll() is None:
+            try:
+                self._sway.terminate()   # _run respawns with the new timeout
+            except Exception:
+                pass
+
     def set_timeout(self, secs: int):
-        """Change the inactivity timeout at runtime. swayidle bakes the timeout
-        into its launch args, so we update the value and respawn swayidle (the
-        _run loop rebuilds its command each spawn); a pending warning is
-        canceled so the new timeout applies cleanly from now."""
+        """HA-facing: set the FULL ('in-use') timeout in seconds. In adaptive mode
+        the short 'unused' window is fixed (IDLE_OFF_SHORT_TIMEOUT); this adjusts
+        the long one, applied live unless we're currently in the short window
+        (then it takes effect the next time usage extends it)."""
         secs = int(secs)
         if secs < 1:
             log.warning("ignoring invalid idle timeout: %s", secs)
             return
-        if secs == self.timeout_secs:
+        if secs == self._long_timeout:
             return
-        log.info("idle auto-off timeout %ds -> %ds", self.timeout_secs, secs)
-        self.timeout_secs = secs
+        log.info("full idle timeout %ds -> %ds", self._long_timeout, secs)
+        self._long_timeout = secs
+        if not self._adaptive or self.timeout_secs != self._short_timeout:
+            self._apply_timeout(secs)
+
+    def on_power_on(self):
+        """Media center transitioned OFF->ON (a fresh power-on). In adaptive mode,
+        start the SHORT 'unused' window; the first real input (local OR from
+        HA/phone) extends it to the full timeout via _usage_watcher."""
+        if not self._adaptive:
+            return
+        log.info("power-on -> short idle window %ds (first use -> %ds)",
+                 self._short_timeout, self._long_timeout)
+        self._apply_timeout(self._short_timeout)
+
+    def defer(self, secs: float):
+        """Suppress idle power-off for `secs` from now (e.g. right after an
+        attention chime, so a ping can never cascade into a power-off). Extends
+        any existing defer and cancels a pending warning."""
+        self._defer_until = max(self._defer_until, time.monotonic() + max(0.0, float(secs)))
         self._cancel_warning()
-        # Respawn swayidle so it re-arms with the new timeout. Terminating it
-        # makes the _run loop's read exit and reissue Popen with the new value.
-        if self._sway is not None and self._sway.poll() is None:
-            self._sway.terminate()
+        log.info("idle power-off delayed ~%.0fs", secs)
 
     @property
     def timeout(self) -> int:
-        return self.timeout_secs
+        return self._long_timeout    # HA shows/controls the full timeout
 
     # ---- lifecycle ----
     def start(self):
         self._last_sway_event = time.monotonic()
+        self._input.start()   # begin watching real input devices
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         # Watchdog respawns swayidle if it goes stale (see _watchdog).
         self._wd_thread = threading.Thread(target=self._watchdog, daemon=True)
         self._wd_thread.start()
+        # Adaptive timeout: extend the short 'unused' window to the full timeout
+        # on the first real input after a power-on.
+        if self._adaptive:
+            self._usage_thread = threading.Thread(target=self._usage_watcher,
+                                                  daemon=True)
+            self._usage_thread.start()
 
     def stop(self):
         self._stop.set()
@@ -124,6 +178,7 @@ class IdleOff:
             self._sway.terminate()
         self._cancel_warning()
         self._stop_resume_watcher()
+        self._input.stop()
 
     # ---- warning countdown state ----
     def _cancel_warning(self):
@@ -268,6 +323,23 @@ class IdleOff:
         # Check a few times per idle period, but not too chatty; min 60s.
         return max(60.0, self.timeout_secs / 4.0)
 
+    def _usage_watcher(self):
+        """Adaptive timeout: while we're in the SHORT 'freshly-powered-on, unused'
+        window, the first REAL input extends us to the full timeout for the rest
+        of the session. InputActivity sees local remote/keyboard/mouse AND input
+        injected by HA/phone controls (via ydotool), so 'using it from anywhere'
+        counts. Media playback is handled separately (idle-off defers while it
+        plays)."""
+        while not self._stop.wait(1.5):
+            if not (self._enabled and self._adaptive):
+                continue
+            if self.timeout_secs >= self._long_timeout:
+                continue                      # already on the full timeout
+            if self._input.active and self._input.seconds_since_last() < 2.5:
+                log.info("real input during short window — extending to full %ds",
+                         self._long_timeout)
+                self._apply_timeout(self._long_timeout)
+
     def _on_resume(self):
         # Any input returned — cancel a pending warning if one is up.
         if self._warn_active:
@@ -277,6 +349,41 @@ class IdleOff:
     def _on_input_idle(self):
         if not self._enabled:
             return
+        # Delayed (e.g. right after an attention chime): don't power off; re-arm
+        # swayidle so it keeps watching and will fire again later.
+        if time.monotonic() < self._defer_until:
+            log.info("idle fired but within defer window (%.0fs left) — re-arming, "
+                     "not powering off", self._defer_until - time.monotonic())
+            if self._sway is not None and self._sway.poll() is None:
+                try:
+                    self._sway.terminate()   # _run respawns a fresh swayidle
+                except Exception:
+                    pass
+            return
+        # CROSS-CHECK real input: swayidle can go deaf and fire a bogus IDLE even
+        # while the user is pressing the remote/keyboard. Our independent input
+        # watcher sees /dev/input directly, so if there was genuine input within
+        # the idle window, this IDLE is false — defer and respawn swayidle so it
+        # re-arms with a fresh (working) listener.
+        if self._input.active:
+            since = self._input.seconds_since_last()
+            # Margin: on a GENUINE idle, input_activity and swayidle both reset on
+            # the last real input, so `since` ≈ timeout_secs. Only treat this IDLE
+            # as a DEAF swayidle (bogus IDLE fired while the user is actually
+            # active) when real input was MEANINGFULLY more recent than the idle
+            # period — otherwise normal timing skew (since a hair under timeout)
+            # would falsely veto every power-off. 0.75× gives a generous margin
+            # while still catching an active user (since ≈ a few seconds).
+            if since < self.timeout_secs * 0.75:
+                log.warning("swayidle reported IDLE but real input was %.0fs ago "
+                            "(< %.0fs) — false idle (deaf swayidle); deferring + "
+                            "respawning", since, self.timeout_secs * 0.75)
+                if self._sway is not None and self._sway.poll() is None:
+                    try:
+                        self._sway.terminate()  # _run respawns a fresh one
+                    except Exception:
+                        pass
+                return
         # Input has been idle for `timeout_secs`. If media is playing, this is
         # NOT inactivity — defer (swayidle stays armed and will fire again on the
         # next idle period after playback stops / input resumes).
@@ -348,3 +455,8 @@ class IdleOff:
             log.info("idle auto-off: fired Media Center Off scene")
         except Exception as e:
             log.exception("idle auto-off: failed to fire off scene: %s", e)
+        # Back to the full timeout now the system is off, so any idle re-fires
+        # while it stays off are infrequent; the NEXT power-on re-enters the
+        # short 'unused' window (on_power_on).
+        if self._adaptive:
+            self._apply_timeout(self._long_timeout)

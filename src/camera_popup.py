@@ -14,7 +14,7 @@ and never takes keyboard focus (the foreground app keeps it; you can still switc
 apps underneath). It works the same in the normal Plasma desktop.
 
 An earlier mpv-based version needed KWin scripting to place the window and to
-lower fullscreen apps; none of that worked under Bigscreen (see git history).
+lower fullscreen apps; none of that worked under Bigscreen .
 The layer-shell overlay handles placement, layering, focus, and animation
 natively via the QML file (campopup.qml), so this module just launches/kills it.
 

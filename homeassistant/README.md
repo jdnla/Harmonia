@@ -35,10 +35,10 @@ templates/notification can read them.
 ## Files
 
 - **`now_playing_package.yaml`** — core HA, no custom components. Transport
-  scripts + the Pixel 9 now-playing notification (title/art/state + prev /
+  scripts + the phone now-playing notification (title/art/state + prev /
   play-pause / next action buttons) + the action handler. Drop it in
   `<config>/packages/` (see the header for the one-time `packages:` include).
-  Swap `notify.mobile_app_pixel_9` for your device if the slug differs.
+  Swap `notify.mobile_app_your_phone` for your device if the slug differs.
 - **`media_player_hacs.yaml`** — OPTIONAL. A real `media_player` entity with a
   live scrubber card. Requires the HACS "Template Media Player" integration
   (core HA has no template/MQTT media_player platform). Reuses the transport
@@ -46,7 +46,7 @@ templates/notification can read them.
 
 ## Bridge config (Plex source)
 
-To get the rich Plex metadata, set these in `config.env` on the media PC (they
+To get the rich Plex metadata, set these in `config.env` on the host (they
 are secrets — `config.env` is gitignored):
 
 ```

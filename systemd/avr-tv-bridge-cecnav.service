@@ -1,8 +1,8 @@
 [Unit]
 Description=CEC D-pad navigation — inject keystrokes from TV CEC remote passthrough
 # User service: runs in the graphical session (needs the ydotool socket to
-# inject into focused apps). jordan is in the `video` group so cec-follower can
-# read /dev/cec0 without root.
+# inject into focused apps). The desktop user is in the `video` group so
+# cec-follower can read /dev/cec0 without root.
 After=graphical-session.target ydotoold.service
 Wants=ydotoold.service
 PartOf=graphical-session.target

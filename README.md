@@ -1,13 +1,11 @@
 # Harmonia
 
-*(formerly `avr-tv-bridge` — the repo/service keep that name for back-compat;
-the MQTT/HA discovery prefix is unchanged so existing entities are preserved.)*
-
-A self-hosted media-center integration for a Linux HTPC running **KDE Plasma
+A self-hosted media-center integration for a Linux host running **KDE Plasma
 (Wayland)** and **Home Assistant**. It bridges an AV receiver and/or a TV into
-Home Assistant over MQTT, and turns the box into a remote-controllable media
+Home Assistant over MQTT, and turns the host into a remote-controllable media
 center: launch apps, navigate them with the TV remote, control playback, match
-the PC's audio output to your speaker layout, and pop up a camera feed on motion.
+the host's audio output to your speaker layout, and pop up a camera feed on
+motion.
 
 It's built around a **driver model** so it isn't tied to specific hardware — you
 declare what you have in config and the bridge composes itself:
@@ -22,7 +20,7 @@ declare what you have in config and the bridge composes itself:
 | App control      | KWin (via `kdotool`) + `ydotool` | KDE Plasma Wayland |
 | Camera popup     | any `mpv`-playable stream        | Frigate/go2rtc, or any RTSP/HTTP source |
 
-> **Tested on:** Denon AVR-X1800H, Vizio P65Q9-H1, Ubuntu 26.04 / KDE Plasma 6,
+> **Reference hardware:** Denon AVR-X1800H, Vizio P65Q9-H1, Ubuntu 26.04 / KDE Plasma 6,
 > a USB-UIRT, and Frigate.
 
 ## Driver model (mix-and-match hardware)
@@ -38,28 +36,30 @@ SPEAKER_CHANNELS=8         # 2 = stereo/TV-direct, 6 = 5.1, 8 = 7.1
 
 Supported setups out of the box:
 
-- **Receiver + TV** (the reference setup): Denon AVR + Vizio TV, audio 7.1.
+- **Receiver + TV (example):** any supported receiver and display; a Denon AVR
+  with a Vizio TV at 7.1 is the reference pairing.
 - **TV-direct (no receiver):** `HARMONIA_RECEIVER=none` and give the display
   volume/mute caps (`VIZIO_CAPS=power,input,volume,mute`); the TV becomes the
-  audio authority and `SPEAKER_CHANNELS` caps the layout the PC outputs.
+  audio authority and `SPEAKER_CHANNELS` caps the layout the host outputs.
 - **CEC-only TV:** `HARMONIA_DISPLAY=cec` for TVs without a network API (power
   works; input/volume are scaffolded per-TV).
 
 **Adding hardware** is a drop-in plugin — scaffold it, don't hand-write it:
 
 ```
-python3 setup/harmonia_driver.py new receiver yamaha   # creates src/drivers/yamaha_driver.py
+python3 setup/harmonia_driver.py new receiver yamaha   # creates src/drivers/yamaha/
 python3 setup/harmonia_driver.py list                  # see registered drivers + their hooks
 ```
 
 The scaffold subclasses `AVReceiver`/`Display` (see `drivers/base.py`), registers
 itself with `@register_receiver/@register_display`, and stubs `from_env`,
-`get_state`, the commands, and an optional `discover()` hook with TODO markers.
-Any `*_driver.py` in `src/drivers/` **auto-loads** — no `__init__.py` edit, no
-bridge changes. `denon_driver.py` / `vizio_driver.py` are the reference
-implementations. Optional per-driver hooks: `discover(ssdp_results)` (makes it
-show up in the setup wizard automatically) and `selftest(env)` (feeds
-`harmonia doctor`); both have safe defaults.
+`get_state`, the commands, and an optional `discover()` hook with placeholder
+methods. Any package under `src/drivers/<name>/` (or a `*_driver.py` module)
+**auto-loads** — no central edit, no bridge changes. `drivers/denon/` and
+`drivers/vizio/` are the reference packages: brand-specific clients, pairing,
+and remote profiles stay inside the package. Optional per-driver hooks:
+`discover(ssdp_results)` (makes it show up in the setup wizard automatically)
+and `selftest(env)` (feeds `harmonia doctor`); both have safe defaults.
 
 ## The `harmonia` command
 
@@ -68,7 +68,7 @@ everything (it wraps the venv python so the tools always have their deps):
 
 ```
 harmonia setup                     # guided discovery + config wizard
-harmonia doctor                    # read-only health check (fixes per red line)
+harmonia doctor                    # read-only health check
 harmonia status                    # concise up/down of all three services
 harmonia start|stop|restart [tgt]  # all services, or one: bridge|launcher|cecnav
 harmonia logs [-f] [tgt]           # journal for a service (default: bridge)
@@ -77,7 +77,13 @@ harmonia config get <KEY>          # print one value (scripting-friendly)
 harmonia config set <KEY> <VALUE>  # edit config.env in place (keeps a .bak)
 harmonia list                      # registered device drivers + their hooks
 harmonia driver new <role> <name>  # scaffold a new driver plugin
-harmonia pair <tv_ip>              # pair a Vizio SmartCast TV
+harmonia pair [host] [--driver D]  # pair the configured display/receiver
+harmonia device list               # configured + registered device drivers
+harmonia device profile            # read display diagnostics (driver from config)
+harmonia device inputs             # list inputs + visibility
+harmonia device hide-input --input HDMI-3 --apply
+harmonia device key "MENU 1 9 9 9" # send a driver-defined key sequence
+harmonia device state --role receiver
 ```
 
 Lifecycle commands span the whole system — the **bridge** is a system service,
@@ -95,6 +101,10 @@ Everything appears under a single **"Media Center"** device in Home Assistant:
 
 - **AV control** — receiver power / volume / mute / input, TV power / input, with
   real state feedback from the devices' network APIs.
+- **Display diagnostics and keys** — read-only TV firmware/audio/ad/input
+  diagnostics where the display driver exposes them, plus HA buttons and a text
+  entity for `MENU`/`BACK`/`OK`/`HOME` and arbitrary key sequences (for example
+  `MENU 1 9 9 9`).
 - **"Media Center On/Off" scene** + **Master Power/Volume/Mute** — bring the whole
   chain up to your chosen default inputs, or shut it down, in one tap.
 - **App launcher** — launch (or focus, fullscreen) configured apps from the TV
@@ -109,26 +119,42 @@ Everything appears under a single **"Media Center"** device in Home Assistant:
 - **Media transport** — Play/Pause / Next / Previous + a "Now Playing" sensor.
 - **Camera auto-popup** — a small always-on-top overlay of a camera feed when a
   detection MQTT topic fires, auto-closing when it clears. Toggleable from HA.
-- **Display wake** — wakes the PC's screen (DPMS) when the AV gear powers on.
+- **Display wake** — wakes the host's screen (DPMS) when the AV gear powers on.
 - **Power-sync** — keeps the receiver in step with the TV (fixes CEC turning on
   one device but not the other).
+- **IR remote (receive / send / learn)** — via the USB-UIRT + LIRC. Received
+  presses become an HA `event` entity (automation triggers) + a "Last IR Code"
+  sensor; known codes get tap-to-send buttons plus a generic "Remote/KEY" send
+  box; and new codes can be **learned** on the fly (point a remote at the
+  receiver, capture, replay). Lives under a nested "IR Blaster" device. Full
+  details in [`docs/IR.md`](docs/IR.md).
 
-## Two components, two services
+## Components & services
 
 The system splits along a privilege boundary:
 
-1. **AV/TV bridge** (`src/bridge.py`) — a **system** service. Talks to the
-   receiver, the TV, and the MQTT broker over the network. No GUI access needed.
+1. **AV/TV bridge** (`src/bridge.py`) — a **system** service (runs as your user).
+   Talks to the receiver, the TV, and the MQTT broker over the network. No GUI
+   access needed.
 
 2. **App launcher / media / camera** (`src/launcher_service.py`) — a **user**
    service running inside the KDE session (it needs the graphical environment to
    open/focus windows). Handles app launching, D-pad injection, media transport,
-   the camera popup, and display wake.
+   the camera popup, and display wake. Alongside it run `avr-tv-bridge-cecnav`
+   (CEC D-pad) and `ydotoold` (key injection), also user services.
 
-Both publish their entities under the same HA device, so it looks like one
-device even though two processes do the work.
+3. **IR bridge** (`src/ir_bridge.py`) — a **system** service that runs as
+   **root** (the only one that does). Exposes the USB-UIRT IR transceiver to HA
+   for receiving remote presses, sending/blasting IR, and learning new codes. It
+   runs as root because *learning* must stop/start `lircd`, open the serial
+   device, and write `/etc/lirc` configs; receive/send alone are unprivileged.
+   See [`docs/IR.md`](docs/IR.md). Optional — installed only if LIRC is present.
 
-## Input paths (how the remote reaches the PC)
+All publish their entities over MQTT discovery, so the whole thing shows up in HA
+as one **"Media Center"** device (with IR under a nested "IR Blaster" sub-device)
+even though separate processes do the work.
+
+## Input paths (how the remote reaches the host)
 
 - **App launch** (e.g. number buttons) → **IR** (an LIRC device → `lircd` →
   `irexec`).
@@ -145,12 +171,12 @@ repeat decoding. If your TV doesn't do CEC passthrough, D-pad can fall back to I
 > **ydotool is built from source.** Some distros package a `ydotool` whose `key`
 > command emits no events; `setup/build_ydotool.sh` builds a working one to
 > `/usr/local/bin`. The installer runs this and masks any packaged
-> `ydotool.service` (it would fight our daemon over `/dev/uinput`).
+> `ydotool.service` (it would fight the daemon over `/dev/uinput`).
 
 ## Install
 
-Prerequisites: KDE Plasma (Wayland), an MQTT broker reachable from the HTPC (Home
-Assistant's broker is fine), and the HTPC user in the `video`, `input`, and
+Prerequisites: KDE Plasma (Wayland), an MQTT broker reachable from the host
+(Home Assistant's broker is fine), and the host user in the `video`, `input`, and
 `dialout` groups.
 
 ```bash
@@ -173,16 +199,18 @@ Then configure:
    ```bash
    cp config.env.example ~/.config/avr-tv-bridge/config.env   # installer does this too
    ```
-   Set your MQTT credentials, the receiver/TV IPs, the scene's default inputs,
+   Set your MQTT credentials, the receiver/TV addresses, the scene's default inputs,
    and any optional features. Every setting is documented in the file.
-2. If your TV needs pairing (Vizio SmartCast does), run its one-time pairing —
-   a PIN appears on the TV:
+2. If the configured display/receiver driver supports pairing, run its one-time
+   pairing — a PIN appears on the device. `--driver` overrides the config
+   selection; `--save` writes the selected driver and returned values back to
+   `config.env`:
    ```bash
-   /opt/avr-tv-bridge/venv/bin/python setup/pair_vizio.py <TV_IP>
+   harmonia pair --save
    ```
 3. Start / check:
    ```bash
-   sudo systemctl start avr-tv-bridge
+   sudo systemctl start avr-tv-bridge avr-tv-bridge-ir   # -ir only if LIRC present
    systemctl --user status avr-tv-bridge-launcher avr-tv-bridge-cecnav ydotoold irexec
    ```
 
@@ -199,18 +227,25 @@ cd <your working clone> && make rebuild-venv
 
 All settings live in `config.env` (see `config.env.example` for the full list):
 
-- **Devices** — `RECEIVER_HOST` / `TV_HOST` and friends; the scene's default
-  inputs (`SCENE_AVR_INPUT`, `SCENE_TV_INPUT`); the input option lists shown in
-  HA.
+- **Devices** — `HARMONIA_RECEIVER` / `HARMONIA_DISPLAY` select the drivers;
+  each driver reads its own host/token keys (for example `DENON_HOST`,
+  `VIZIO_HOST`). The scene's default inputs are `SCENE_AVR_INPUT` and
+  `SCENE_TV_INPUT`; the input option lists are shown in HA.
 - **TV without its own speakers** — if audio is routed to the receiver, the TV
   exposes only power+input by default. Set `VIZIO_CAPS=power,volume,mute,input`
   to use the TV's speakers instead.
+- **TV diagnostics** — `VIZIO_PROFILE_INTERVAL` controls read-only SmartCast
+  polling (default 60 s; 0 disables it).
+- **TV input naming** — some Vizio SmartCast firmware rejects remote input-name
+  writes; rename the input in the TV's Input Settings, then set
+  `SCENE_TV_INPUT_MATCH` to that label so the bridge auto-detects it. Until
+  then, `SCENE_TV_INPUT` remains the fallback.
 - **Apps** — the launcher's app registry is in `src/launcher.py` (window-match
   patterns + launch command + fullscreen). Add your own apps there.
 - **Camera popup** — set `CAM_POPUP_TRIGGER_TOPIC` (any topic publishing a count,
   e.g. Frigate's `frigate/<camera>/person`) and `CAM_POPUP_STREAM_URL` (any
   `mpv`-playable URL; a go2rtc HTTP endpoint avoids embedding camera creds).
-  Window placement is best set with a KWin rule — see `TODO.md`.
+  Window placement is best set with a KWin rule.
 - **Receiver volume display offset** — `DENON_VOLUME_OFFSET` so HA matches the
   number on the receiver's on-screen display, if they differ.
 - **Power-sync** — `SYNC_POWER=1` (default) keeps the receiver following the TV.
@@ -222,8 +257,13 @@ All settings live in `config.env` (see `config.env.example` for the full list):
 HACS `button-card` and `card-mod`). Home Assistant derives entity_ids from the
 device/entity names, so IDs look like `switch.media_center_master_power`,
 `button.media_center_launch_plex`, `sensor.media_center_now_playing`, etc. — the
-exact prefix depends on your device name at first discovery. Check
-Settings → Entities and adjust the card entity_ids to match yours.
+exact prefix depends on your device name at first discovery, and HA's slugs are
+**inconsistent** across discovery batches. Check Settings → Entities and adjust
+the card entity_ids to match yours.
+
+The example install also has a hand-built **`media-remote`** dashboard (one
+view). Editing HA dashboards goes through HA's authenticated websocket API; use
+a short-lived token and never store it in the repository.
 
 ## Deploy changes
 
@@ -241,18 +281,24 @@ For the user-session services, re-run `install-launcher.sh` (or copy `src/` into
 
 ```
 src/
-  bridge.py denon.py vizio.py discovery.py     AV/TV bridge (system service)
+  bridge.py discovery.py                       AV/TV bridge (system service)
+  drivers/denon/    client.py driver.py         receiver implementation
+  drivers/vizio/    client.py driver.py pair.py display implementation
+  drivers/vizio/lirc/vizio.lircd.conf           example TV-remote profile
+  drivers/s3box/lirc/s3box.lircd.conf           optional example remote profile
+  ir_bridge.py                                 IR receive/send/learn (root service)
   launcher.py launcher_service.py session_env.py launch_app.sh
   navkey.py navkey.sh                          IR D-pad key injection (fallback)
   cec_nav.py                                   CEC D-pad navigation (primary)
   media_control.py                             play/pause/next/prev + status
   camera_popup.py                              motion-triggered camera overlay
   display_wake.py                              DPMS wake
-setup/    pair_vizio.py, build_ydotool.sh
-systemd/  bridge, cec-playback, launcher, cecnav, ydotoold units
-lirc/     IR device driver options, remote config, irexec.lircrc
-kwin/     camera-popup.kwinrule (reference; set the rule via GUI — see TODO)
-install.sh              system bridge + CEC + IR
+docs/     IR.md (IR bridge deep-dive), IR-S3BOX-EXAMPLE.md (optional example),
+tests/    test_ir_bridge.py, test_chime.py, …  stdlib unittest
+setup/    device_tools.py, setup/doctor/config helpers, build_ydotool.sh
+systemd/  bridge, ir, cec-playback, launcher, cecnav, ydotoold units
+lirc/     lirc_options.conf, irexec.lircrc (generic app/nav mapping)
+install.sh              system bridge + CEC + IR (+ root IR bridge, §6b)
 install-launcher.sh     user launcher + CEC nav + ydotool + media + camera
 config.env.example      all settings, documented
 homeassistant-dashboard.yaml
@@ -261,12 +307,14 @@ Makefile                deploy / rebuild-venv / status / logs
 
 ## Adapting to different hardware
 
-- **Different AVR/TV brand:** the network clients are isolated in `src/denon.py`
-  and `src/vizio.py` behind a small interface (get state; set power/input/volume/
-  mute). Swap in a client for your brand and wire it up in `src/bridge.py`.
+- **Different AVR/TV brand:** add a package under `src/drivers/<brand>/` with a
+  driver class and its client/pairing code; it auto-loads and is selected by
+  `HARMONIA_RECEIVER` or `HARMONIA_DISPLAY`. Do not add brand branches to the
+  generic CLI or bridge.
+- **Different remote:** put its LIRC profile in `src/drivers/<brand>/lirc/`
+  (or keep it alongside the device package) and update `install.sh`; map any
+  buttons in `lirc/irexec.lircrc`.
 - **No CEC passthrough on your TV:** map the D-pad buttons in `lirc/irexec.lircrc`
   to `navkey.sh` to drive navigation over IR instead.
-- **Different remote:** record it with `irrecord` and drop the config in
-  `lirc/`. The repo's config is a canonical NEC layout you can adapt.
 
 Secrets (`config.env`, `*.token`) are gitignored.

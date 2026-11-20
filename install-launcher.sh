@@ -31,6 +31,42 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# kdotool drives all launcher window ops (find/focus/fullscreen/close) via KWin
+# scripting. It MUST be >= 0.3.0: older builds (e.g. a hand-compiled 0.2.1) are
+# incompatible with KWin 6.6+ and panic ("Object path was not valid:
+# /Scripting/Script-1"), silently breaking every window operation. v0.3.0 also
+# requires KDE_SESSION_VERSION in the env (session_env.py provides it). This
+# installs/upgrades the pinned prebuilt binary when kdotool is missing or older.
+KDOTOOL_MIN="0.3.0"
+KDOTOOL_URL="https://github.com/jinliu/kdotool/releases/download/v${KDOTOOL_MIN}/kdotool-${KDOTOOL_MIN}-x86_64-unknown-linux-gnu.tar.gz"
+ensure_kdotool() {
+  local have=""
+  if command -v kdotool >/dev/null 2>&1; then
+    have="$(KDE_SESSION_VERSION=6 kdotool --version 2>/dev/null \
+             | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    if [ -n "$have" ] && \
+       [ "$(printf '%s\n%s\n' "$KDOTOOL_MIN" "$have" | sort -V | head -1)" = "$KDOTOOL_MIN" ]; then
+      log "kdotool $have OK (>= $KDOTOOL_MIN)"
+      return 0
+    fi
+  fi
+  log "Installing kdotool $KDOTOOL_MIN (found: ${have:-none}) — required for KWin 6 window control"
+  local tmp; tmp="$(mktemp -d)"
+  if curl -fsSL "$KDOTOOL_URL" -o "$tmp/k.tgz" 2>/dev/null && tar xzf "$tmp/k.tgz" -C "$tmp" 2>/dev/null; then
+    local bin; bin="$(find "$tmp" -type f -name kdotool | head -1)"
+    if [ -n "$bin" ]; then
+      sudo install -m755 "$bin" /usr/local/bin/kdotool \
+        && log "kdotool $KDOTOOL_MIN installed to /usr/local/bin" \
+        || warn "could not install kdotool to /usr/local/bin (window focus/fullscreen will be degraded)"
+    else
+      warn "kdotool binary not found in release tarball"
+    fi
+  else
+    warn "could not download kdotool $KDOTOOL_MIN — window focus/fullscreen will be degraded"
+  fi
+  rm -rf "$tmp"
+}
+
 [ "$EUID" -eq 0 ] && die "Run as your normal user, not root (this installs a --user service)."
 
 # ---- 1. environment sanity checks (portability) --------------------------
@@ -44,7 +80,7 @@ fi
 log "Checking required tools"
 MISSING=()
 need() { command -v "$1" >/dev/null 2>&1 || MISSING+=("$1 ($2)"); }
-need kdotool "window focus on KDE Wayland — https://github.com/jinliu/kdotool"
+ensure_kdotool   # install/upgrade kdotool to the KWin-6-compatible pinned build
 need python3 "python runtime"
 # playerctl drives media play/pause/next/prev via MPRIS (Chrome/Netflix, browsers)
 # with real playing/paused state; without it, media control falls back to key
@@ -85,6 +121,30 @@ if [ "$DO_IR" -eq 1 ]; then
 fi
 if [ "${#MISSING[@]}" -gt 0 ]; then
   echo; die "Missing required tools:$(printf '\n  - %s' "${MISSING[@]}")"
+fi
+
+# ---- 2d. appliance hardening ----------------------------------------------
+# Retire the system cec-playback.service: the cecnav user service (installed
+# below) claims the CEC playback role + OSD name itself — identical cec-ctl
+# command, but with retries and self-healing on display re-init — so the
+# boot-time oneshot is redundant (and on some boots it never started, lingering
+# as a dead unit). Safe to skip if the unit isn't present.
+if systemctl list-unit-files cec-playback.service >/dev/null 2>&1 \
+   && [ -n "$(systemctl list-unit-files cec-playback.service --no-legend 2>/dev/null)" ]; then
+  sudo systemctl disable --now cec-playback.service 2>/dev/null \
+    && log "Disabled redundant cec-playback.service (cecnav owns the CEC role)" || true
+fi
+# KDE Discover intermittently crashes on SHUTDOWN in its Snap backend
+# (snap-backend.so — a use-after-free during ResourcesModel/QObject teardown),
+# dumping ~200MB /var/crash files. This is NOT a GPU bug: the coredump's
+# libgallium frames are just idle Mesa worker threads; hardware GL works fine
+# (radeonsi GL 4.6). Remove the snap backend — Discover keeps managing apt /
+# flatpak / fwupd on hardware rendering, and snaps still work via snapd (they're
+# just not browsable in Discover's GUI). Definitive fix for the actual crash.
+if dpkg -s plasma-discover-backend-snap >/dev/null 2>&1; then
+  sudo apt-get remove -y plasma-discover-backend-snap >/dev/null 2>&1 \
+    && log "Removed plasma-discover-backend-snap (crashed Discover on teardown)" \
+    || warn "could not remove plasma-discover-backend-snap (Discover may crash on exit)"
 fi
 
 # ---- 3. install code + venv ----------------------------------------------

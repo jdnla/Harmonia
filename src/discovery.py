@@ -27,7 +27,7 @@ BASE = "avr-tv-bridge"
 # Denon, the Vizio, and — from launcher_service — the launch buttons) attach to,
 # so everything shows up under one "Media Center" device in HA. Entities keep
 # their own unique_ids; only the device grouping is unified.
-DEVICE_ID = f"{BASE}_mediacenter"
+DEVICE_ID = f"{BASE}_host"
 DEVICE_NAME = "Media Center"
 
 
@@ -208,6 +208,84 @@ def build_hub_entities(vol_max: float = 100, vol_step: float = 1,
             "availability": avail, "device": dev, "icon": "mdi:volume-mute",
         }))
 
+    return out
+
+
+def build_tv_diagnostics(dev_id: str, label_prefix: str = "TV",
+                         ) -> list[tuple[str, dict]]:
+    """Read-only SmartCast diagnostics for the display device."""
+    dev = _shared_device()
+    sb = state_base(dev_id)
+    avail = [{"topic": f"{BASE}/bridge/availability"},
+             {"topic": f"{sb}/availability"}]
+    pfx = f"{label_prefix} " if label_prefix else ""
+    out: list[tuple[str, dict]] = []
+
+    sensors = (
+        ("firmware", "Firmware", "mdi:chip", "tv/firmware/state"),
+        ("speakers", "Speakers", "mdi:speaker", "tv/speakers/state"),
+        ("earc", "eARC", "mdi:hdmi-port", "tv/earc/state"),
+        ("ad_tracking", "Ad Tracking", "mdi:shield-account", "tv/ad_tracking/state"),
+        ("ad_replacement", "Ad Replacement", "mdi:television-classic",
+         "tv/ad_replacement/state"),
+    )
+    for entity, name, icon, state_topic in sensors:
+        out.append((topic("sensor", dev_id, f"tv_{entity}"), {
+            "name": f"{pfx}{name}",
+            "unique_id": f"{BASE}_{dev_id}_tv_{entity}",
+            "state_topic": f"{sb}/{state_topic}",
+            "availability": avail, "availability_mode": "all",
+            "device": dev, "icon": icon,
+            "entity_category": "diagnostic",
+        }))
+
+    out.append((topic("sensor", dev_id, "tv_inputs"), {
+        "name": f"{pfx}Inputs",
+        "unique_id": f"{BASE}_{dev_id}_tv_inputs",
+        "state_topic": f"{sb}/tv/inputs/state",
+        "json_attributes_topic": f"{sb}/tv/inputs/attributes",
+        "availability": avail, "availability_mode": "all",
+        "device": dev, "icon": "mdi:import",
+        "entity_category": "diagnostic",
+    }))
+    return out
+
+
+def build_tv_controls(dev_id: str, label_prefix: str = "TV",
+                      ) -> list[tuple[str, dict]]:
+    """Buttons and a text entity for SmartCast key commands."""
+    dev = _shared_device()
+    sb = state_base(dev_id)
+    avail = [{"topic": f"{BASE}/bridge/availability"},
+             {"topic": f"{sb}/availability"}]
+    pfx = f"{label_prefix} " if label_prefix else ""
+    out: list[tuple[str, dict]] = []
+
+    for key, name, icon in (
+        ("menu", "Menu", "mdi:menu"),
+        ("back", "Back", "mdi:arrow-left"),
+        ("ok", "OK", "mdi:check-circle-outline"),
+        ("home", "Home", "mdi:home"),
+    ):
+        out.append((topic("button", dev_id, f"key_{key}"), {
+            "name": f"{pfx}{name}",
+            "unique_id": f"{BASE}_{dev_id}_key_{key}",
+            "command_topic": f"{sb}/key/{key}/set",
+            "payload_press": "PRESS",
+            "availability": avail, "availability_mode": "all",
+            "device": dev, "icon": icon,
+        }))
+
+    out.append((topic("text", dev_id, "key_sequence"), {
+        "name": f"{pfx}Key Sequence",
+        "unique_id": f"{BASE}_{dev_id}_key_sequence",
+        "command_topic": f"{sb}/key_sequence/set",
+        "state_topic": f"{sb}/key_sequence/state",
+        "max": 128,
+        "availability": avail, "availability_mode": "all",
+        "device": dev, "icon": "mdi:remote",
+        "entity_category": "config",
+    }))
     return out
 
 

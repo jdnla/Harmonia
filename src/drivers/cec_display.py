@@ -2,7 +2,7 @@
 
 For TVs without a native network API: control power + (optionally) volume/mute
 over HDMI-CEC using cec-client (libcec) or the same navkey/CEC path the rest of
-the project uses. This is a scaffold — the CEC command plumbing is marked TODO
+the project uses. This is a scaffold — the CEC command plumbing is marked as placeholders
 where hardware-specific testing is needed. It registers as HARMONIA_DISPLAY=cec.
 
 Enough is implemented to be usable for power on/off and to serve as the template
@@ -68,7 +68,7 @@ class CECDisplay(Display):
         # CEC power-status polling ('pow 0') is slow/flaky on many adapters.
         # Report available but power unknown unless a poll is explicitly enabled.
         state = {"available": True}
-        # TODO: optional 'pow 0' parse when CEC_POLL_POWER=1.
+        # Placeholder: optional 'pow 0' parse when CEC_POLL_POWER=1.
         return state
 
     # ---- commands ----
@@ -77,7 +77,7 @@ class CECDisplay(Display):
 
     def set_input(self, src: str) -> None:
         # Input switching over CEC is device-specific (active-source / vendor
-        # commands). Left as TODO for per-TV tuning.
+        # commands). Left as a placeholder for per-TV tuning.
         log.info("CEC set_input(%s) not implemented for this display", src)
 
     # Volume over CEC (only if declared): CEC volume-up/down/mute user-control.

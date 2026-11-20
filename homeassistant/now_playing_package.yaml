@@ -1,8 +1,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# avr-tv-bridge — "Now Playing" media_player + Pixel 9 notification
+# avr-tv-bridge — "Now Playing" media_player + phone notification
 #
 # WHAT THIS GIVES YOU (core HA, no custom components)
-#   1. An actionable "Now Playing" notification on your Pixel 9 (via the HA
+#   1. An actionable "Now Playing" notification on your phone (via the HA
 #      companion app): title, subtitle/episode, poster art (Plex), current
 #      state, and prev / play-pause / next media action buttons that control
 #      playback. Refreshes on state/title change, clears when playback stops.
@@ -15,7 +15,7 @@
 # HOW IT WORKS
 #   The bridge publishes discrete now-playing fields over MQTT (state, title,
 #   subtitle, art, position, duration, source, media_type). Core HA has NO
-#   media_player MQTT discovery platform, so we build the entity from:
+#   media_player MQTT discovery platform, so the package builds the entity from:
 #     - MQTT *sensors* the bridge already auto-discovers (the field topics), and
 #     - a Universal Media Player that composes them + scripts that publish the
 #       transport commands back to the bridge.
@@ -30,7 +30,7 @@
 #          homeassistant:
 #            packages: !include_dir_named packages
 #     2. Drop this file in  <config>/packages/avr_now_playing.yaml
-#     3. Replace notify.mobile_app_pixel_9 below if your device slug differs
+#     3. Replace notify.mobile_app_your_phone below if your device slug differs
 #        (Developer Tools → Actions → search "mobile_app").
 #     4. Restart HA (scripts + automations load on restart; you can also use
 #        Developer Tools → YAML → "Reload Scripts" and "Reload Automations").
@@ -89,10 +89,10 @@ script:
 # The PHONE NOTIFICATION below needs NEITHER — it reads the field sensors
 # directly, so it works on a stock core HA with no custom components.
 
-# ---- automation: Pixel 9 now-playing notification ----------------------------
+# ---- automation: phone now-playing notification ----------------------------
 automation:
   - id: avr_now_playing_notify
-    alias: "Media Center: Now Playing notification (Pixel 9)"
+    alias: "Media Center: Now Playing notification (phone)"
     description: >
       Push/refresh an actionable media notification whenever playback starts,
       the title changes, or play/pause toggles. Cleared when playback stops.
@@ -118,7 +118,7 @@ automation:
                   art: "{{ states('sensor.media_center_media_art') }}"
                   playing: >
                     {{ states('sensor.media_center_media_state') == 'playing' }}
-              - service: notify.mobile_app_pixel_9
+              - service: notify.mobile_app_your_phone
                 data:
                   title: "{{ title if title else 'Media Center' }}"
                   message: >
@@ -155,7 +155,7 @@ automation:
                         title: "⏭"
         # ---- stopped/idle: clear the notification ---------------------------
         default:
-          - service: notify.mobile_app_pixel_9
+          - service: notify.mobile_app_your_phone
             data:
               message: clear_notification
               data:

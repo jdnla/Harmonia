@@ -9,19 +9,20 @@ themselves by name so the bridge can compose a system purely from config:
     HARMONIA_AUDIO=hdmi            # PipeWire/HDMI channel management
 
 The registry (`registry.py`) maps those names to driver classes. New hardware
-support is added by dropping a module in this package that subclasses the right
-base and calls the register_* decorator — no bridge changes required.
+support is added by dropping a package under `src/drivers/<brand>/` that
+subclasses the right base and calls the register_* decorator — no bridge
+changes required.
 """
 from __future__ import annotations
 
-# Importing the concrete driver modules registers them (via decorators).
+# Importing the concrete driver packages registers them (via decorators).
 # Kept in one place so `import drivers` wires up the whole catalog.
 from . import base  # noqa: F401
 from . import registry  # noqa: F401
 
-# Concrete drivers auto-load: any module in this package ending in "_driver" or
-# named for a device group registers itself on import. This makes plugins truly
-# drop-in — scaffold a new src/drivers/<name>_driver.py (see
+# Concrete drivers auto-load: any package in this directory (or a legacy
+# *_driver.py module) registers itself on import. This makes plugins truly
+# drop-in — scaffold a new src/drivers/<name>/ package (see
 # setup/harmonia_driver.py) and it's picked up with no edits here. Each import is
 # wrapped so one broken/optional driver can't take down the whole catalog.
 import logging as _logging
@@ -31,7 +32,7 @@ import pkgutil as _pkgutil
 _log = _logging.getLogger("drivers")
 
 # Always-load core modules first (stable order), then auto-discover the rest.
-_CORE = ("denon_driver", "vizio_driver", "cec_display", "null_devices")
+_CORE = ("denon", "vizio", "cec_display", "null_devices")
 _seen = set()
 
 
@@ -48,10 +49,10 @@ def _load(mod: str):
 for _m in _CORE:
     _load(_m)
 
-# Auto-discover any other *_driver.py (and *_devices.py) modules dropped in.
+# Auto-discover any other driver packages/modules dropped in.
 for _finder, _name, _ispkg in _pkgutil.iter_modules([_os.path.dirname(__file__)]):
     if _name in ("base", "registry", "__init__"):
         continue
-    if _name.endswith("_driver") or _name.endswith("_devices") \
+    if _ispkg or _name.endswith("_driver") or _name.endswith("_devices") \
             or _name.endswith("_display"):
         _load(_name)

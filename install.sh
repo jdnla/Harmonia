@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install.sh — provision a media PC to bridge a Denon AVR + Vizio SmartCast TV
+# install.sh — provision a Linux host to bridge an AV receiver and/or display
 # to Home Assistant over MQTT, and set up HDMI-CEC and USB-UIRT IR control.
 #
 # Idempotent: safe to re-run. It installs packages, lays down systemd services,
@@ -65,6 +65,17 @@ chown -R "$RUN_USER":"$RUN_USER" "$INSTALL_DIR"
 # ---- 2b. harmonia CLI -----------------------------------------------------
 log "Installing 'harmonia' command to /usr/local/bin"
 install -m 755 "$REPO_DIR/setup/harmonia" /usr/local/bin/harmonia
+
+# ---- 2b2. keyboard power hotkeys (Meta+F11 On / Meta+F12 Off) --------------
+# Runs as the unprivileged user (writes ~/.config + ~/.local/share). Live
+# registration needs a running session, so during install it just writes the
+# config; it activates at next login (or run `harmonia hotkeys` in-session).
+if [[ -f "$REPO_DIR/setup/register_hotkeys.sh" ]]; then
+  log "Registering keyboard power hotkeys for $RUN_USER"
+  sudo -u "$RUN_USER" HOME="$RUN_HOME" INSTALL_DIR="$INSTALL_DIR" \
+    bash "$REPO_DIR/setup/register_hotkeys.sh" || \
+    echo "   -> hotkey registration skipped (run 'harmonia hotkeys' in-session)"
+fi
 
 # ---- 2c. Chrome D-pad extension (force-install via managed policy) ---------
 # Google Chrome ignores --load-extension, so we pack the extension to a signed
@@ -144,8 +155,10 @@ fi
 if [[ $DO_IR -eq 1 ]]; then
   log "Configuring LIRC for USB-UIRT"
   install -m 644 "$REPO_DIR/lirc/lirc_options.conf" /etc/lirc/lirc_options.conf
-  install -m 644 "$REPO_DIR/lirc/vizio.lircd.conf" \
+  install -m 644 "$REPO_DIR/src/drivers/vizio/lirc/vizio.lircd.conf" \
     /etc/lirc/lircd.conf.d/vizio.lircd.conf
+  install -m 644 "$REPO_DIR/src/drivers/s3box/lirc/s3box.lircd.conf" \
+    /etc/lirc/lircd.conf.d/s3box.lircd.conf
   # Remove the distro's default remote stub so it doesn't shadow ours.
   [[ -f /etc/lirc/lircd.conf.d/devinput.lircd.conf ]] && \
     mv /etc/lirc/lircd.conf.d/devinput.lircd.conf \
@@ -166,6 +179,24 @@ fi
 systemctl daemon-reload
 systemctl enable avr-tv-bridge.service
 
+# ---- 6b. IR bridge service (root) -----------------------------------------
+# Exposes the USB-UIRT IR transceiver to Home Assistant (receive/send/learn).
+# Runs as root (not $RUN_USER): learning stops/starts lircd, opens the serial
+# device, and writes /etc/lirc configs. Only installed if LIRC is present.
+if command -v irsend >/dev/null 2>&1; then
+  log "Installing IR bridge systemd service (running as root)"
+  install -d -m 755 /var/lib/avr-tv-bridge-ir
+  sed -e "s|^EnvironmentFile=.*|EnvironmentFile=$CONFIG_DIR/config.env|" \
+      -e "s|^Environment=IREXEC_USER=.*|Environment=IREXEC_USER=$RUN_USER|" \
+      -e "s|^Environment=IREXEC_UID=.*|Environment=IREXEC_UID=$(id -u "$RUN_USER")|" \
+      "$REPO_DIR/systemd/avr-tv-bridge-ir.service" \
+      > /etc/systemd/system/avr-tv-bridge-ir.service
+  systemctl daemon-reload
+  systemctl enable avr-tv-bridge-ir.service
+else
+  log "LIRC (irsend) not found — skipping IR bridge service"
+fi
+
 cat <<EOF
 
 $(log "Install complete.")
@@ -174,7 +205,7 @@ Finish setup with the guided wizard (run as $RUN_USER, NOT root):
   harmonia setup
 
 It discovers your receiver/TV on the network, auto-detects the speaker layout,
-pairs the TV, and writes your config. Then:
+pairs devices that support pairing, and writes your config. Then:
 
   harmonia doctor            # verify everything is healthy
   harmonia start             # start the bridge
@@ -183,6 +214,6 @@ pairs the TV, and writes your config. Then:
 Other commands:  harmonia status | list | driver new <role> <name> | help
 
 (Prefer to configure by hand? Edit $CONFIG_DIR/config.env, run
- 'harmonia pair <TV_IP>', then 'harmonia start'.) Devices appear automatically
-in Home Assistant via MQTT discovery.
+ 'harmonia pair [host] [--driver <name>] [--save]', then 'harmonia start'.)
+Devices appear automatically in Home Assistant via MQTT discovery.
 EOF

@@ -79,6 +79,26 @@ def _read_retained(common: list[str], topic: str, timeout: float) -> str | None:
         return None
 
 
+def retained_tv_input(default: str, timeout: float = 2.0) -> str:
+    """Return the media-center TV input the bridge has auto-detected.
+
+    The bridge publishes the real input (following the physical wiring, not a
+    hardcoded HDMI port) to a retained topic; we read it so app-launch source
+    correction targets the SAME input the power-on scene uses. Falls back to
+    `default` if the bridge/broker is unreachable or hasn't published yet — so
+    this never makes launching worse than the old static value.
+    """
+    _load_config_env()
+    host = os.environ.get("MQTT_HOST")
+    if not host:
+        return default
+    common = _mqtt_common(host, os.environ.get("MQTT_PORT", "1883"),
+                          os.environ.get("MQTT_USER", ""),
+                          os.environ.get("MQTT_PASS", ""))
+    val = _read_retained(common, f"{BASE}/scene/tv_input/state", timeout)
+    return val if val else default
+
+
 def ensure_source(source: dict, timeout: float = 4.0) -> None:
     """Correct TV/AVR inputs to match `source` if (and only if) they're wrong.
 
