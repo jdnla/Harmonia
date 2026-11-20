@@ -5,9 +5,9 @@ Two subcommands:
 
   list                       Show all registered drivers + which optional hooks
                              (discover / selftest) each implements.
-  new <role> <name>          Scaffold a ready-to-edit driver module in
-                             src/drivers/<name>_driver.py with the right base
-                             class, registration, from_env, and placeholder methods.
+  new <role> <name>          Scaffold a ready-to-edit driver package in
+                             src/drivers/<name>/ with the right base class,
+                             registration, from_env, and placeholder methods.
 
 Examples:
   python3 setup/harmonia_driver.py list
@@ -69,9 +69,9 @@ in the base class). Register name: "{name}" (config: HARMONIA_{ROLE}={name}).
 """
 from __future__ import annotations
 
-from .base import ({base_cls}, DiscoveredDevice,
-                   CAP_POWER, CAP_VOLUME, CAP_MUTE, CAP_INPUT)
-from .registry import register_{role}
+from ..base import ({base_cls}, DiscoveredDevice,
+                    CAP_POWER, CAP_VOLUME, CAP_MUTE, CAP_INPUT)
+from ..registry import register_{role}
 
 
 @register_{role}("{name}")
@@ -138,13 +138,20 @@ _RECEIVER_METHODS = '''
         raise NotImplementedError  # Placeholder
 '''
 
+_INIT_TEMPLATE = '''\
+"""{Title} {role} driver package."""
+from .driver import {ClassName}
+
+__all__ = ["{ClassName}"]
+'''
+
 
 def cmd_new(role: str, name: str):
     if role not in ("receiver", "display"):
         hc.bad("role must be 'receiver' or 'display'")
         sys.exit(2)
     name = name.lower()
-    dest = os.path.join(SRC, "drivers", f"{name}_driver.py")
+    dest = os.path.join(SRC, "drivers", name)
     if os.path.exists(dest):
         hc.bad(f"{dest} already exists")
         sys.exit(2)
@@ -158,12 +165,17 @@ def cmd_new(role: str, name: str):
         ENVPREFIX=name.upper(), LABEL=("AVR" if role == "receiver" else "TV"),
         extra_methods=_RECEIVER_METHODS if role == "receiver" else "",
     )
-    with open(dest, "w") as f:
+    os.makedirs(dest)
+    with open(os.path.join(dest, "driver.py"), "w") as f:
         f.write(body)
-    hc.ok(f"created {dest}")
-    hc.info("Next: implement the placeholder methods. The module auto-loads (any "
-            "*_driver.py here is picked up), so no __init__.py edit is needed —"
-            " verify with:  python3 setup/harmonia_driver.py list")
+    with open(os.path.join(dest, "__init__.py"), "w") as f:
+        f.write(_INIT_TEMPLATE.format(
+            Title=name.capitalize(), role=role,
+            ClassName=f"{name.capitalize()}{base_cls}"))
+    hc.ok(f"created {dest}/ (driver.py + __init__.py)")
+    hc.info("Next: implement the placeholder methods. The package auto-loads, so no "
+            "central edit is needed — verify with:  "
+            "python3 setup/harmonia_driver.py list")
     hc.info(f"Select it with:  HARMONIA_{role.upper()}={name}  and "
             f"{name.upper()}_HOST=<ip> in config.env")
 

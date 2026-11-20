@@ -18,12 +18,12 @@ brand-specific client:
   key <sequence...>               Send a driver-defined key sequence.
 
 The driver comes from HARMONIA_DISPLAY / HARMONIA_RECEIVER in config.env, or
-from --driver. Brand details live in src/drivers/<name>_driver.py; this tool
+from --driver. Brand details live in src/drivers/<name>/; this tool
 only calls the optional hooks documented on drivers.base.Device. Add a new TV
 or receiver by registering a driver, not by editing this CLI.
 
 Examples:
-    harmonia pair --driver vizio 192.0.2.50 --save
+    harmonia pair --driver vizio vizio.example --save
     harmonia device list
     harmonia device profile --driver vizio
     harmonia device inputs

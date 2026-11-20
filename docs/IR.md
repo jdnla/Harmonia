@@ -27,7 +27,7 @@ re-deriving everything.
   the bridge and irexec coexist without conflict.
 - **Loaded remote(s):** whatever LIRC remotes you install. This repo includes
   example profiles for a TV remote and, optionally, an ESP32-S3-BOX-3
-  (`lirc/s3box.lircd.conf`). List what lircd knows with
+  (`src/drivers/s3box/lirc/s3box.lircd.conf`). List what lircd knows with
   `irsend LIST "" ""` and per-remote keys with `irsend LIST <remote> ""`.
 
 ## The service: `avr-tv-bridge-ir.service` (runs as **root**)
@@ -173,7 +173,7 @@ mosquitto_sub -h <MQTT_HOST> -u <MQTT_USER> -P <MQTT_PASS> \
 - **Learn always fails "no IR captured":** the USB-UIRT didn't see the burst —
   aim the remote at it and press firmly within the timeout. Check `mode2` can
   open the device while lircd is stopped.
-- **`uirt2_raw: checksum error` on lircd start:** the deployed
+- **`uirt2_raw: checksum error` on lircd start:** the installed
   `/etc/lirc/lirc_options.conf` is using `uirt2_raw` instead of
   `usb_uirt_raw`, or a stale `mode2` from a hung learn still owns the device.
   Stop `avr-tv-bridge-ir`, `pkill -f mode2`, verify
@@ -188,7 +188,7 @@ mosquitto_sub -h <MQTT_HOST> -u <MQTT_USER> -P <MQTT_PASS> \
 No particular remote or IR device is required: the bridge works with any LIRC
 remote, and you can run it with none of the optional profiles installed. The
 repo includes example profiles for a TV remote and, optionally, an
-ESP32-S3-BOX-3 (`lirc/s3box.lircd.conf`). The S3BOX example link is documented
+ESP32-S3-BOX-3 (`src/drivers/s3box/lirc/s3box.lircd.conf`). The S3BOX example link is documented
 separately in [`IR-S3BOX-EXAMPLE.md`](IR-S3BOX-EXAMPLE.md); skip it unless you
 use that hardware.
 

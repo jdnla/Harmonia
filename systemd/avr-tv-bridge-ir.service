@@ -10,8 +10,8 @@ Type=simple
 # /etc/lirc configs. Receive/send alone would work unprivileged (the lircd
 # socket is world-rw) but learning is the deciding factor.
 # EnvironmentFile (MQTT creds) and the IREXEC_* hints are filled in by install.sh.
-EnvironmentFile=/home/jdnla/.config/avr-tv-bridge/config.env
-Environment=IREXEC_USER=jdnla
+EnvironmentFile=/home/USER/.config/avr-tv-bridge/config.env
+Environment=IREXEC_USER=USER
 Environment=IREXEC_UID=1000
 WorkingDirectory=/opt/avr-tv-bridge/src
 ExecStart=/opt/avr-tv-bridge/venv/bin/python /opt/avr-tv-bridge/src/ir_bridge.py

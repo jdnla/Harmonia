@@ -1,16 +1,14 @@
 """Denon/Marantz AV receiver driver.
 
-Thin adapter that wraps the existing, well-tested DenonClient (denon.py, telnet
-protocol) and exposes it through the AVReceiver interface + driver registry.
-Behavior is identical to the pre-refactor direct use; this just makes it
-selectable via HARMONIA_RECEIVER=denon.
+Adapter that wraps the telnet client and exposes it through the AVReceiver
+interface + driver registry, selectable via HARMONIA_RECEIVER=denon.
 """
 from __future__ import annotations
 
-from denon import DenonClient
-from .base import (AVReceiver, DiscoveredDevice,
-                   CAP_POWER, CAP_VOLUME, CAP_MUTE, CAP_INPUT)
-from .registry import register_receiver
+from .client import DenonClient
+from ..base import (AVReceiver, DiscoveredDevice,
+                    CAP_POWER, CAP_VOLUME, CAP_MUTE, CAP_INPUT)
+from ..registry import register_receiver
 
 
 @register_receiver("denon")

@@ -48,11 +48,11 @@ deploy: ## Pull latest and update the running service
 
 _sync: ## Copy source into the installed location
 	@echo "==> Syncing src/ and setup/ into $(INSTALL_DIR)"
-	@# The install dir is owned by the running user, so no sudo needed here.
-	mkdir -p $(INSTALL_DIR)/src/drivers $(INSTALL_DIR)/setup
-	cp -f src/*.py $(INSTALL_DIR)/src/
-	cp -f src/drivers/*.py $(INSTALL_DIR)/src/drivers/
-	cp -f setup/*.py $(INSTALL_DIR)/setup/
+	@# Use rsync --delete so removed/renamed brand modules do not linger in
+	@# /opt and get auto-loaded alongside their replacements.
+	mkdir -p $(INSTALL_DIR)/src $(INSTALL_DIR)/setup
+	rsync -a --delete --exclude '__pycache__' src/ $(INSTALL_DIR)/src/
+	rsync -a --delete --exclude '__pycache__' setup/ $(INSTALL_DIR)/setup/
 
 _deps: ## Update venv deps if requirements.txt changed
 	@echo "==> Ensuring Python deps are current"

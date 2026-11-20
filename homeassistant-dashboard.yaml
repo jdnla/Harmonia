@@ -4,8 +4,8 @@
 # Requires HACS custom card: button-card  (custom:button-card)
 # (card-mod styling removed for portability; the entities cards use HA defaults.)
 #
-# Entity IDs are the REAL ones HA generated from the original device names
-# (verified via Developer Tools → States):
+# Entity IDs are derived from the discovered device names; check them in
+# Developer Tools → States and adjust:
 #   Hub:      switch/number.media_center_bridge_*
 #   Launcher: button.media_center_launcher_*
 #   Denon:    *.denon_x1800h_*

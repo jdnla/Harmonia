@@ -1,6 +1,7 @@
 [Unit]
 Description=ydotoold — virtual input device daemon (for IR D-pad key injection)
-# User service. jdnla has /dev/uinput access via ACL, so no root needed.
+# User service. The desktop user has /dev/uinput access via ACL, so no root
+# is needed.
 # Provides the socket that `ydotool` uses to inject keystrokes into the session.
 After=graphical-session.target
 PartOf=graphical-session.target

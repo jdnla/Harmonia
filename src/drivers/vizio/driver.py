@@ -1,16 +1,17 @@
 """Vizio SmartCast TV driver.
 
-Adapter wrapping the existing VizioClient (vizio.py, SmartCast REST) behind the
-Display interface. Declares capabilities from config: by default a TV whose
-audio is routed to a receiver exposes only power+input, but a TV-direct setup
-can add volume+mute via VIZIO_CAPS.
+Adapter wrapping the SmartCast client behind the Display interface. Declares
+capabilities from config: by default a TV whose audio is routed to a receiver
+exposes only power+input, but a TV-direct setup can add volume+mute via
+VIZIO_CAPS.
 """
 from __future__ import annotations
 
-from vizio import VizioClient, pair as vizio_pair
-from .base import (Display, DiscoveredDevice,
-                   CAP_POWER, CAP_VOLUME, CAP_MUTE, CAP_INPUT)
-from .registry import register_display
+from .client import VizioClient
+from .pair import pair as vizio_pair
+from ..base import (Display, DiscoveredDevice,
+                    CAP_POWER, CAP_VOLUME, CAP_MUTE, CAP_INPUT)
+from ..registry import register_display
 
 
 @register_display("vizio")

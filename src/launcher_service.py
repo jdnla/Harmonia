@@ -167,7 +167,7 @@ class LauncherService:
             denon_host = env("DENON_HOST", "")
             if denon_host:
                 try:
-                    from denon import DenonClient
+                    from drivers.denon.client import DenonClient
                     self._chime_denon = DenonClient(denon_host)
                 except Exception as e:
                     log.warning("chime: no direct Denon client (%s); using the "
@@ -198,7 +198,7 @@ class LauncherService:
             denon_client = None
             if env("CHANNEL_SYNC_DENON_CHECK", "0") in ("1", "true", "True"):
                 try:
-                    from denon import DenonClient
+                    from drivers.denon.client import DenonClient
                     denon_client = DenonClient(env("DENON_HOST", required=True))
                 except Exception as e:
                     log.warning("channel-sync Denon cross-check unavailable: %s", e)

@@ -36,8 +36,8 @@ SPEAKER_CHANNELS=8         # 2 = stereo/TV-direct, 6 = 5.1, 8 = 7.1
 
 Supported setups out of the box:
 
-- **Receiver + TV (example):** any supported receiver and display; the tested
-  pairing is a Denon AVR with a Vizio TV at 7.1.
+- **Receiver + TV (example):** any supported receiver and display; a Denon AVR
+  with a Vizio TV at 7.1 is the reference pairing.
 - **TV-direct (no receiver):** `HARMONIA_RECEIVER=none` and give the display
   volume/mute caps (`VIZIO_CAPS=power,input,volume,mute`); the TV becomes the
   audio authority and `SPEAKER_CHANNELS` caps the layout the host outputs.
@@ -53,12 +53,13 @@ python3 setup/harmonia_driver.py list                  # see registered drivers 
 
 The scaffold subclasses `AVReceiver`/`Display` (see `drivers/base.py`), registers
 itself with `@register_receiver/@register_display`, and stubs `from_env`,
-`get_state`, the commands, and an optional `discover()` hook with placeholder methods.
-Any `*_driver.py` in `src/drivers/` **auto-loads** — no `__init__.py` edit, no
-bridge changes. `denon_driver.py` / `vizio_driver.py` are the reference
-implementations. Optional per-driver hooks: `discover(ssdp_results)` (makes it
-show up in the setup wizard automatically) and `selftest(env)` (feeds
-`harmonia doctor`); both have safe defaults.
+`get_state`, the commands, and an optional `discover()` hook with placeholder
+methods. Any package under `src/drivers/<name>/` (or a `*_driver.py` module)
+**auto-loads** — no central edit, no bridge changes. `drivers/denon/` and
+`drivers/vizio/` are the reference packages: brand-specific clients, pairing,
+and remote profiles stay inside the package. Optional per-driver hooks:
+`discover(ssdp_results)` (makes it show up in the setup wizard automatically)
+and `selftest(env)` (feeds `harmonia doctor`); both have safe defaults.
 
 ## The `harmonia` command
 
@@ -260,7 +261,9 @@ exact prefix depends on your device name at first discovery, and HA's slugs are
 **inconsistent** across discovery batches. Check Settings → Entities and adjust
 the card entity_ids to match yours.
 
-The example install also has a hand-built **`media-remote`** dashboard (one view). Editing HA dashboards goes through HA's authenticated websocket API; use a short-lived token and never store it in the repository.
+The example install also has a hand-built **`media-remote`** dashboard (one
+view). Editing HA dashboards goes through HA's authenticated websocket API; use
+a short-lived token and never store it in the repository.
 
 ## Deploy changes
 
@@ -278,7 +281,11 @@ For the user-session services, re-run `install-launcher.sh` (or copy `src/` into
 
 ```
 src/
-  bridge.py denon.py vizio.py discovery.py     AV/TV bridge (system service)
+  bridge.py discovery.py                       AV/TV bridge (system service)
+  drivers/denon/    client.py driver.py         receiver implementation
+  drivers/vizio/    client.py driver.py pair.py display implementation
+  drivers/vizio/lirc/vizio.lircd.conf           example TV-remote profile
+  drivers/s3box/lirc/s3box.lircd.conf           optional example remote profile
   ir_bridge.py                                 IR receive/send/learn (root service)
   launcher.py launcher_service.py session_env.py launch_app.sh
   navkey.py navkey.sh                          IR D-pad key injection (fallback)
@@ -290,7 +297,7 @@ docs/     IR.md (IR bridge deep-dive), IR-S3BOX-EXAMPLE.md (optional example),
 tests/    test_ir_bridge.py, test_chime.py, …  stdlib unittest
 setup/    device_tools.py, setup/doctor/config helpers, build_ydotool.sh
 systemd/  bridge, ir, cec-playback, launcher, cecnav, ydotoold units
-lirc/     IR device driver options, remote config, irexec.lircrc
+lirc/     lirc_options.conf, irexec.lircrc (generic app/nav mapping)
 install.sh              system bridge + CEC + IR (+ root IR bridge, §6b)
 install-launcher.sh     user launcher + CEC nav + ydotool + media + camera
 config.env.example      all settings, documented
@@ -300,9 +307,13 @@ Makefile                deploy / rebuild-venv / status / logs
 
 ## Adapting to different hardware
 
-- **Different AVR/TV brand:** the network clients are isolated in `src/denon.py`
-  and `src/vizio.py` behind a small interface (get state; set power/input/volume/
-  mute). Swap in a client for your brand and wire it up in `src/bridge.py`.
+- **Different AVR/TV brand:** add a package under `src/drivers/<brand>/` with a
+  driver class and its client/pairing code; it auto-loads and is selected by
+  `HARMONIA_RECEIVER` or `HARMONIA_DISPLAY`. Do not add brand branches to the
+  generic CLI or bridge.
+- **Different remote:** put its LIRC profile in `src/drivers/<brand>/lirc/`
+  (or keep it alongside the device package) and update `install.sh`; map any
+  buttons in `lirc/irexec.lircrc`.
 - **No CEC passthrough on your TV:** map the D-pad buttons in `lirc/irexec.lircrc`
   to `navkey.sh` to drive navigation over IR instead.
 

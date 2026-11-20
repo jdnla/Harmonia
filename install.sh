@@ -155,9 +155,9 @@ fi
 if [[ $DO_IR -eq 1 ]]; then
   log "Configuring LIRC for USB-UIRT"
   install -m 644 "$REPO_DIR/lirc/lirc_options.conf" /etc/lirc/lirc_options.conf
-  install -m 644 "$REPO_DIR/lirc/vizio.lircd.conf" \
+  install -m 644 "$REPO_DIR/src/drivers/vizio/lirc/vizio.lircd.conf" \
     /etc/lirc/lircd.conf.d/vizio.lircd.conf
-  install -m 644 "$REPO_DIR/lirc/s3box.lircd.conf" \
+  install -m 644 "$REPO_DIR/src/drivers/s3box/lirc/s3box.lircd.conf" \
     /etc/lirc/lircd.conf.d/s3box.lircd.conf
   # Remove the distro's default remote stub so it doesn't shadow ours.
   [[ -f /etc/lirc/lircd.conf.d/devinput.lircd.conf ]] && \
